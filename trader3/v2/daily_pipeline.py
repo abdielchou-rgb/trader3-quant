@@ -21,6 +21,8 @@ import logging
 import os
 from datetime import datetime
 
+from trader3.v2.costs import DEFAULT_COSTS
+
 logger = logging.getLogger("trader3.v2.daily")
 
 # ── 纸面交易配置（模块顶部常量，可调） ──────────────────
@@ -211,7 +213,55 @@ def run_paper_trades(triggered_results: list) -> dict:
         "note": PAPER_NOTE,
     }
     ss.write_json("account", state)   # 原子写（临时文件+os.replace+跨进程锁）
+    _append_fills_log(today, trades_today)
     return state
+
+
+FILLS_LOG_HEADER = "date,code,side,volume,price,cost_cny,ok,msg\n"
+
+
+def _append_fills_log(today: str, trades: list[dict]) -> None:
+    """
+    追加式成交流水（成本模型校准的数据来源）。
+    只记录 ok=True 的实际成交；CSV 追加写，文件不存在时先写表头。
+    """
+    import csv as _csv
+    import os
+
+    from trader3.shared_state import SharedState
+
+    path = os.path.join(SharedState().state_dir, "paper", "fills.csv")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    need_header = not os.path.exists(path)
+    rows = []
+    stamp_bp = 1.0  # 印花税近似（卖出单边，bp）——与 costs 模型同口径的流水级估算
+    for t in trades:
+        if not (t.get("ok") and t.get("side") in ("buy", "sell")):
+            continue
+        vol = float(t.get("volume", 0) or 0)
+        price = float(t.get("price", 0) or 0)
+        gross = vol * price
+        commission = max(gross * (DEFAULT_COSTS.commission_bp / 10000.0),
+                         DEFAULT_COSTS.min_commission or 0.0)
+        cost = commission + (gross * stamp_bp / 10000.0 if t["side"] == "sell" else 0.0)
+        rows.append({
+            "date": today,
+            "code": t.get("code", ""),
+            "side": t.get("side", ""),
+            "volume": int(vol),
+            "price": price,
+            "cost_cny": round(cost, 2),
+            "ok": True,
+            "msg": str(t.get("msg", ""))[:60],
+        })
+    rows_out = rows
+    if not rows_out and need_header:
+        return  # 无成交且无文件 → 不产生空壳
+    with open(path, "a", encoding="utf-8", newline="") as f:
+        w = _csv.DictWriter(f, fieldnames=FILLS_LOG_HEADER.strip().split(","))
+        if need_header:
+            w.writeheader()
+        w.writerows(rows_out)
 
 
 def format_alerts(summary: dict) -> str:

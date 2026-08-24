@@ -20,6 +20,33 @@ from trader3.base_tool import BaseTool, ChartSpec, Trader3Response
 from trader3.models import OptimizationResult, PortfolioConstraints
 
 # ═══════════════════════════════════════════
+# Solver backend (cvxpy 可用则升级凸优化路径)
+# ═══════════════════════════════════════════
+
+try:
+    import cvxpy as cp
+except Exception:  # noqa: BLE001 - cvxpy 为可选依赖
+    cp = None
+
+SOLVER_BACKEND = "cvxpy" if cp is not None else "scipy"
+CVXPY_FALLBACK_NOTE = "cvxpy失败回退SLSQP"
+
+
+def _refresh_solver_backend() -> str:
+    """重新探测 cvxpy 可用性并刷新模块级后端标志（测试隔离用）。"""
+    global cp, SOLVER_BACKEND
+    import importlib
+
+    try:
+        cp = importlib.import_module("cvxpy")
+        SOLVER_BACKEND = "cvxpy"
+    except Exception:  # noqa: BLE001
+        cp = None
+        SOLVER_BACKEND = "scipy"
+    return SOLVER_BACKEND
+
+
+# ═══════════════════════════════════════════
 # Constants
 # ═══════════════════════════════════════════
 
@@ -162,41 +189,101 @@ def _verify_constraints(weights: np.ndarray, cons: dict) -> list[str]:
 # 优化器
 # ═══════════════════════════════════════════
 
+def _solve_cvxpy_mean_variance(
+    mu: np.ndarray,
+    Sigma: np.ndarray,
+    N: int,
+    risk_aversion: float,
+    max_single: float,
+) -> np.ndarray:
+    """maximize μᵀw − (λ/2)·wᵀΣw s.t. sum(w)=1, 0≤w≤max_single。失败抛异常。"""
+    w = cp.Variable(N)
+    sigma_sym = 0.5 * (Sigma + Sigma.T)
+    objective = cp.Minimize(
+        0.5 * risk_aversion * cp.quad_form(w, cp.psd_wrap(sigma_sym)) - mu @ w
+    )
+    problem = cp.Problem(objective, [cp.sum(w) == 1, w >= 0, w <= max_single])
+    problem.solve()
+    vals = np.asarray(w.value, dtype=np.float64).ravel()
+    if vals.size != N or not bool(np.all(np.isfinite(vals))):
+        raise RuntimeError(f"cvxpy 返回无效解 (size={vals.size}, N={N})")
+    return vals
+
+
+def _solve_cvxpy_risk_budget(
+    Sigma: np.ndarray,
+    N: int,
+    max_single: float,
+) -> np.ndarray:
+    """Spinu 风险平价凸式: min Σᵢ(wᵢ(Σw)ᵢ − bᵢ·log wᵢ)，b=等权预算，后归一化。"""
+    w = cp.Variable(N)
+    b = np.full(N, 1.0 / N)
+    sigma_sym = 0.5 * (Sigma + Sigma.T)
+    objective = cp.Minimize(
+        cp.sum(cp.multiply(w, sigma_sym @ w)) - cp.sum(cp.multiply(b, cp.log(w)))
+    )
+    problem = cp.Problem(objective, [cp.sum(w) == 1, w >= 1e-9, w <= max_single])
+    problem.solve()
+    vals = np.asarray(w.value, dtype=np.float64).ravel()
+    if vals.size != N or not bool(np.all(np.isfinite(vals))):
+        raise RuntimeError(f"cvxpy 返回无效解 (size={vals.size}, N={N})")
+    return vals
+
+
 def _risk_budget_optimize(
     Sigma: np.ndarray,
     tickers: list[str],
     constraints: dict,
+    meta: dict | None = None,
 ) -> tuple[np.ndarray, bool, list[str]]:
     """
     风险平价 / 最小方差优化。
+
+    cvxpy 可用时走 Spinu 凸式（min Σᵢ(wᵢ(Σw)ᵢ − bᵢ log wᵢ)）；
+    否则/失败时回退 SLSQP 最小方差。
 
     minimize: 0.5 * w' * Sigma * w
     subject to: sum(w) = 1, 0 <= w_i <= max_single, long_only
     """
     N = len(tickers)
     max_single = constraints["max_single"]
+    violations: list[str] = []
+    backend_used = "scipy-SLSQP"
 
-    def objective(w):
-        return 0.5 * w @ Sigma @ w
+    weights: np.ndarray | None = None
+    if SOLVER_BACKEND == "cvxpy":
+        try:
+            weights = _solve_cvxpy_risk_budget(Sigma, N, max_single)
+            backend_used = "cvxpy"
+        except Exception as exc:
+            violations.append(f"{CVXPY_FALLBACK_NOTE}（{type(exc).__name__}: {exc}）")
+            weights = None
 
-    cons_list = [{"type": "eq", "fun": lambda w: np.sum(w) - 1.0}]
-    bounds = [(0.0, max_single) for _ in range(N)]
+    if weights is not None:
+        success = True
+    else:
+        def objective(w):
+            return 0.5 * w @ Sigma @ w
 
-    w0 = np.full(N, 1.0 / N)
+        cons_list = [{"type": "eq", "fun": lambda w: np.sum(w) - 1.0}]
+        bounds = [(0.0, max_single) for _ in range(N)]
 
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        result = minimize(
-            objective, w0, method="SLSQP",
-            bounds=bounds, constraints=cons_list,
-            options=SLSQP_OPTIONS,
-        )
+        w0 = np.full(N, 1.0 / N)
 
-    violations = []
-    if not result.success:
-        violations.append(f"SLSQP 收敛警告: {result.message}")
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            result = minimize(
+                objective, w0, method="SLSQP",
+                bounds=bounds, constraints=cons_list,
+                options=SLSQP_OPTIONS,
+            )
 
-    weights = result.x if result.success else w0
+        if not result.success:
+            violations.append(f"SLSQP 收敛警告: {result.message}")
+
+        weights = result.x if result.success else w0
+        success = result.success
+
     # 数值安全: clip + renormalize
     weights = np.clip(weights, 0.0, max_single)
     w_sum = np.sum(weights)
@@ -205,11 +292,11 @@ def _risk_budget_optimize(
     else:
         weights = np.full(N, 1.0 / N)
 
-    if not result.success:
-        violations.append("SLSQP未收敛，已回退等权（结果仅供参考）")
+    if meta is not None:
+        meta["backend"] = backend_used
     violations.extend(_verify_constraints(weights, constraints))
 
-    return weights, result.success, violations
+    return weights, success, violations
 
 
 def _mean_variance_optimize(
@@ -218,9 +305,13 @@ def _mean_variance_optimize(
     tickers: list[str],
     constraints: dict,
     risk_aversion: float = DEFAULT_LAMBDA,
+    meta: dict | None = None,
 ) -> tuple[np.ndarray, bool, list[str]]:
     """
     均值-方差优化。
+
+    cvxpy 可用时走凸式 QP（maximize μᵀw − (λ/2)wᵀΣw），
+    否则/失败时回退 SLSQP。
 
     maximize: w'mu - 0.5*lambda*w'Sigma*w
     subject to: sum(w)=1, 0<=w_i<=max_single, long_only
@@ -229,34 +320,51 @@ def _mean_variance_optimize(
     """
     N = len(tickers)
     max_single = constraints["max_single"]
+    violations: list[str] = []
+    backend_used = "scipy-SLSQP"
 
-    def objective(w):
-        return -(w @ mu) + 0.5 * risk_aversion * (w @ Sigma @ w)
+    weights: np.ndarray | None = None
+    if SOLVER_BACKEND == "cvxpy":
+        try:
+            weights = _solve_cvxpy_mean_variance(mu, Sigma, N, risk_aversion, max_single)
+            backend_used = "cvxpy"
+        except Exception as exc:
+            violations.append(f"{CVXPY_FALLBACK_NOTE}（{type(exc).__name__}: {exc}）")
+            weights = None
 
-    cons_list = [{"type": "eq", "fun": lambda w: np.sum(w) - 1.0}]
-    bounds = [(0.0, max_single) for _ in range(N)]
+    if weights is not None:
+        success = True
+    else:
+        def objective(w):
+            return -(w @ mu) + 0.5 * risk_aversion * (w @ Sigma @ w)
 
-    w0 = np.full(N, 1.0 / N)
+        cons_list = [{"type": "eq", "fun": lambda w: np.sum(w) - 1.0}]
+        bounds = [(0.0, max_single) for _ in range(N)]
 
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        result = minimize(
-            objective, w0, method="SLSQP",
-            bounds=bounds, constraints=cons_list,
-            options=SLSQP_OPTIONS,
-        )
+        w0 = np.full(N, 1.0 / N)
 
-    violations = []
-    weights = result.x if result.success else w0
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            result = minimize(
+                objective, w0, method="SLSQP",
+                bounds=bounds, constraints=cons_list,
+                options=SLSQP_OPTIONS,
+            )
+
+        weights = result.x if result.success else w0
+        success = result.success
+        if not result.success:
+            violations.append(f"SLSQP未收敛，已回退等权: {result.message}")
+
     weights = np.clip(weights, 0.0, max_single)
     w_sum = np.sum(weights)
     weights = weights / w_sum if w_sum > 1e-10 else np.full(N, 1.0 / N)
 
-    if not result.success:
-        violations.append(f"SLSQP未收敛，已回退等权: {result.message}")
+    if meta is not None:
+        meta["backend"] = backend_used
     violations.extend(_verify_constraints(weights, constraints))
 
-    return weights, result.success, violations
+    return weights, success, violations
 
 
 def _black_litterman_optimize(
@@ -467,6 +575,7 @@ class OptimizePortfolioTool(BaseTool):
 
         # ── 选择优化方法 ──
         method = method or "risk_budget"
+        meta_backend: dict = {"backend": "scipy-SLSQP"}
         method_labels = {
             "risk_budget": "风险平价",
             "mean_variance": "均值-方差",
@@ -475,9 +584,13 @@ class OptimizePortfolioTool(BaseTool):
         method_label = method_labels.get(method, method)
 
         if method == "risk_budget":
-            weights, success, violations = _risk_budget_optimize(Sigma, tickers, cons)
+            weights, success, violations = _risk_budget_optimize(
+                Sigma, tickers, cons, meta=meta_backend
+            )
         elif method == "mean_variance":
-            weights, success, violations = _mean_variance_optimize(mu, Sigma, tickers, cons)
+            weights, success, violations = _mean_variance_optimize(
+                mu, Sigma, tickers, cons, meta=meta_backend
+            )
         elif method == "black_litterman":
             weights, success, violations = _black_litterman_optimize(
                 signals, Sigma, tickers, cons,
@@ -516,6 +629,7 @@ class OptimizePortfolioTool(BaseTool):
         )
 
         caveats = [
+            f"求解后端: {meta_backend.get('backend', SOLVER_BACKEND)}",
             f"协方差矩阵来源: {cov_source}（合成估计仅供流程演示，不构成风险预测）"
             if cov_source.startswith("信号") else
             f"协方差矩阵来源: {cov_source}",
@@ -524,7 +638,7 @@ class OptimizePortfolioTool(BaseTool):
             caveats.append(cons["cap_adjusted_note"])
         if not result.constraints_satisfied:
             caveats.append(f"约束违规 {len(structural)} 项: {'; '.join(structural)}")
-        if not all("SLSQP" not in v for v in violations):
+        if any("未收敛" in v or "收敛警告" in v for v in violations):
             caveats.append("求解器存在未收敛警告，权重为回退值")
 
         return Trader3Response(
@@ -694,6 +808,10 @@ class RegimeAwareAllocationTool(BaseTool):
             max_single_weight_cap=float(max_single),
         )
 
+        regime_caveats = [f"求解后端: {SOLVER_BACKEND}"]
+        if cap_violations:
+            regime_caveats.insert(0, f"约束违规: {'; '.join(cap_violations)}")
+
         return Trader3Response(
             success=True,
             data=result,
@@ -704,9 +822,7 @@ class RegimeAwareAllocationTool(BaseTool):
                 f"建议仓位 {suggested_position:.0%}"
                 + ("" if result.constraints_satisfied else " ⚠约束违规")
             ),
-            caveats=(
-                [f"约束违规: {'; '.join(cap_violations)}"] if cap_violations else []
-            ),
+            caveats=regime_caveats,
             key_metrics={
                 "当前状态": current_regime,
                 "主导概率": round(dominant_prob, 4),

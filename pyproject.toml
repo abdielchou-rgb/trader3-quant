@@ -26,6 +26,9 @@ api = [
     "uvicorn>=0.20",
     "httpx>=0.24",
 ]
+cvxpy = [
+    "cvxpy>=1.4",
+]
 
 [project.scripts]
 trader3 = "trader3.cli:main"

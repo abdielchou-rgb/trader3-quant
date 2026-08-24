@@ -5,6 +5,7 @@ P1-② 每周策略汇总报告
 import argparse
 import json
 import os
+import sys
 from collections import defaultdict
 from datetime import datetime, timedelta
 
@@ -100,7 +101,7 @@ def write_markdown_report(report: dict, output_dir: str) -> str:
             lines.append(
                 f"| {entry['date']} | {entry['count']} | "
                 f"{(entry.get('top_score') or 0):.4f} | "
-                f"{('%s' % top_ic) if top_ic is None else format(float(top_ic), '.4f')} |"
+                f"{'-' if top_ic is None else format(float(top_ic), '.4f')} |"
             )
         lines.append("")
 
@@ -142,6 +143,23 @@ def main():
     print(f"📊 周报: {json_path}")
     print(f"📄 Markdown: {md_path}")
     print(f"   覆盖 {len(states)} 天数据, {len(report['summary'])} 个 universe")
+
+    # 推送（未配置通道时仅日志，不阻断）
+    try:
+        sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        from trader3.notify import send_notification
+
+        summary = report.get("summary", {})
+        brief = "\n".join(
+            f"- {u}: 策略数均值 {s.get('avg_count', 0):.1f}, 最佳日 {s.get('best_day', {}).get('date', '-')}"
+            for u, s in summary.items()
+        )
+        send_notification(
+            f"3号交易员周报 {week_start}~{week_end}",
+            f"覆盖 {len(states)} 天\n{brief}\n\n详见: {md_path}",
+        )
+    except Exception as e:
+        print(f"  ⚠ 通知推送失败(不阻断): {e}")
 
 if __name__ == "__main__":
     main()

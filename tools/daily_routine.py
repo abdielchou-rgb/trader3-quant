@@ -101,5 +101,22 @@ def main():
     print(f"\n📄 日报: {daily_path}")
     print(f"📊 今日策略: {json.dumps(strategies_today, ensure_ascii=False)}")
 
+    # Step 5: 推送通知（未配置通道时仅日志，不阻断）
+    try:
+        sys.path.insert(0, PROJECT)
+        from trader3.notify import send_notification
+
+        n_ok = sum(1 for t in results["tasks"].values() if t.get("ok"))
+        brief = "\n".join(
+            f"- {k}: {'✓' if v.get('ok') else '✗'} {str(v.get('output', ''))[:80]}"
+            for k, v in results["tasks"].items()
+        )
+        send_notification(
+            f"3号交易员日报 {today}（{n_ok}/{len(results['tasks'])} 任务成功）",
+            f"{brief}\n\n策略: {json.dumps(strategies_today, ensure_ascii=False)[:800]}",
+        )
+    except Exception as e:
+        print(f"  ⚠ 通知推送失败(不阻断): {e}")
+
 if __name__ == "__main__":
     main()

@@ -14,6 +14,7 @@ import hashlib
 import json
 import math
 import os
+import warnings
 from dataclasses import asdict
 from datetime import datetime
 from typing import Any
@@ -241,6 +242,121 @@ def _annualized_sharpe(daily_returns: np.ndarray) -> float:
     if std <= 1e-12:
         return 0.0
     return float(np.mean(daily_returns)) / std * math.sqrt(TRADING_DAYS_PER_YEAR)
+
+
+# ═══════════════════════════════════════════
+# Deflated Sharpe Ratio（Bailey & López de Prado 多重比较校正）
+# ═══════════════════════════════════════════
+
+_EULER_GAMMA = 0.5772156649015329  # 欧拉-马歇罗尼常数
+
+
+def _norm_cdf(x: float) -> float:
+    """标准正态分布 CDF（stdlib 实现，避免引入 scipy）。"""
+    return 0.5 * math.erfc(-x / math.sqrt(2.0))
+
+
+def _norm_ppf(p: float) -> float:
+    """标准正态分布分位数函数；p 被夹入开区间 (1e-15, 1-1e-15) 防溢出。"""
+    from statistics import NormalDist
+
+    return NormalDist().inv_cdf(min(max(float(p), 1e-15), 1.0 - 1e-15))
+
+
+def _sample_skew_kurt(returns: np.ndarray) -> tuple[float, float]:
+    """
+    收益序列的标准化三/四阶矩（总体口径）：γ3=偏度、γ4=峰度（正态 → (0, 3)）。
+    样本退化（<2 个有限观测或零方差）→ 返回 (0.0, 3.0) 正态默认值。
+    """
+    r = np.asarray(returns, dtype=np.float64).ravel()
+    r = r[np.isfinite(r)]
+    if r.size < 2:
+        return 0.0, 3.0
+    mu = float(np.mean(r))
+    m2 = float(np.mean((r - mu) ** 2))
+    if m2 <= 1e-300:
+        return 0.0, 3.0
+    m3 = float(np.mean((r - mu) ** 3))
+    m4 = float(np.mean((r - mu) ** 4))
+    return m3 / m2**1.5, m4 / m2**2
+
+
+def deflated_sharpe_ratio(
+    sharpe_observed: float,
+    n_trials: int,
+    sr_variance: float | None = None,
+    tail_risk_adj: bool = True,
+    *,
+    n_periods: int = 0,
+    returns: np.ndarray | None = None,
+) -> float:
+    """
+    Deflated Sharpe Ratio：对"从 n_trials 次试验中挑出的最优策略"的夏普做多重比较校正。
+
+    DSR = Φ( ((SR_obs − SR_0) · √(T−1)) /
+             √(1 − γ3·SR + ((γ4−1)/4)·SR²) )
+
+    - SR_0 = √(V[SR across trials]) · ((1−γ)·Φ⁻¹(1−1/N) + γ·Φ⁻¹(1−1/(N·e)))，
+      γ=0.5772（欧拉常数）、N=n_trials、V[SR]=各试验 Sharpe 的样本方差；
+    - γ3/γ4 为收益序列的偏度/峰度；tail_risk_adj=True 且提供 returns 时按序列
+      三/四阶矩估计，否则设 γ3=0、γ4=3（正态默认）；
+    - sr_variance=None 时以单序列估计量方差近似 V[SR] ≈ (1 − γ3·SR + ((γ4−1)/4)·SR²)/(T−1)
+      （多重比较校正的保守下界）；
+    - n_trials=1 无多重比较语境，退化为 PSR(SR*=0)；
+
+    Parameters
+    ----------
+    sharpe_observed : 观测 Sharpe，须与 returns 同频率的单期（如日频）单位；
+                      年化 Sharpe 需先除以 √252 再传入。
+    n_trials : 试验次数（策略配置数/参数网格数/WFA 滚动窗口数等诚实下界）。
+    sr_variance : 各试验 Sharpe 的样本方差；None 时用估计量方差近似。
+    tail_risk_adj : 是否用收益序列高阶矩校正偏度/峰度。
+    n_periods : 单期观测数 T（returns 缺失时使用）。
+    returns : 收益序列（提供时 T=len(returns)，并用于高阶矩估计）。
+
+    Returns
+    -------
+    float — DSR ∈ [0, 1]；输入不合法（n_trials<1、T<2、非有限 SR 等）返回 0.0。
+    """
+    sr_obs = float(sharpe_observed)
+    trials = int(n_trials)
+    rets = (
+        np.asarray(returns, dtype=np.float64).ravel()
+        if returns is not None and np.size(returns)
+        else None
+    )
+    t_obs = int(rets.size) if rets is not None else int(n_periods)
+
+    if trials < 1 or t_obs < 2 or not math.isfinite(sr_obs):
+        return 0.0
+
+    if tail_risk_adj and rets is not None:
+        gamma3, gamma4 = _sample_skew_kurt(rets)
+    else:
+        gamma3, gamma4 = 0.0, 3.0
+
+    denom_sq = 1.0 - gamma3 * sr_obs + (gamma4 - 1.0) / 4.0 * sr_obs**2
+    if not math.isfinite(denom_sq) or denom_sq <= 1e-12:
+        return 0.0
+
+    if trials == 1:
+        sr_0 = 0.0
+    else:
+        var_sr = (
+            float(sr_variance)
+            if sr_variance is not None
+            else denom_sq / (t_obs - 1)
+        )
+        if not math.isfinite(var_sr) or var_sr < 0:
+            return 0.0
+        expected_max = (
+            (1.0 - _EULER_GAMMA) * _norm_ppf(1.0 - 1.0 / trials)
+            + _EULER_GAMMA * _norm_ppf(1.0 - 1.0 / (trials * math.e))
+        )
+        sr_0 = math.sqrt(var_sr) * expected_max
+
+    z_stat = (sr_obs - sr_0) * math.sqrt(t_obs - 1) / math.sqrt(denom_sq)
+    return float(min(max(_norm_cdf(z_stat), 0.0), 1.0))
 
 
 def _price_limit_ratio(code: str) -> float:
@@ -666,17 +782,18 @@ def _load_expression_panels(
     return panels
 
 
-def _expr_scores(
+def _expr_zscores(
     node: Any,
     panels: dict[str, np.ndarray],
     valid_flags: np.ndarray,
 ) -> np.ndarray:
     """
-    在已对齐面板上求值表达式 → 归一化 (T,N) 分数矩阵。
+    在已对齐面板上求值表达式 → 逐日横截面 z-score 的 (T,N) 矩阵（无效处为 NaN）。
 
     - 引用字段缺面板 → 报错（gp.evaluate 对缺失字段默认补零，静默补零会伪装信号）；
     - 求值抛错 / 结果全 NaN → 报错；
-    - 逐日横截面 z-score 归一化；无效（NaN 或 valid_flags=False）处置 -inf 落选。
+    - 无效（NaN 或 valid_flags=False）处置 NaN，不参与当日截面统计，
+      供多因子合成做"NaN 跳过、按可用因子数归一"。
 
     Raises
     ------
@@ -705,22 +822,49 @@ def _expr_scores(
         raise _SignalExprError("表达式计算结果全为 NaN，无法作为选股信号")
 
     vals = np.where(np.isfinite(raw) & valid_flags, raw, np.nan)
-    with np.errstate(all="ignore"):
+    # 整行无效时 nanmean/nanstd 产生 "Mean of empty slice" 警告属预期路径（结果即 NaN）
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", category=RuntimeWarning)
         mu = np.nanmean(vals, axis=1, keepdims=True)
         sd = np.nanstd(vals, axis=1, keepdims=True)
     z = (vals - mu) / (sd + 1e-12)
+    return np.where(np.isfinite(z), z, np.nan)
+
+
+def _combine_factor_scores(score_stack: np.ndarray) -> np.ndarray:
+    """
+    K 个因子分数堆栈 (K,T,N) → 等权合成 (T,N)。
+
+    - NaN 跳过后按当日可用因子数归一（等权平均的 NaN 安全版）；
+    - 任一日全部因子无效 → 该日分数为 NaN（调用方选股时视为 -inf 排除）。
+    """
+    finite = np.isfinite(score_stack)
+    counts = finite.sum(axis=0)
+    sums = np.where(finite, score_stack, 0.0).sum(axis=0)
+    combined = np.full(counts.shape, np.nan, dtype=np.float64)
+    np.divide(sums, counts, out=combined, where=counts > 0)
+    return combined
+
+
+def _expr_scores(
+    node: Any,
+    panels: dict[str, np.ndarray],
+    valid_flags: np.ndarray,
+) -> np.ndarray:
+    """
+    单表达式分数矩阵（选股口径）：_expr_zscores 结果中无效处置 -inf 落选。
+    """
+    z = _expr_zscores(node, panels, valid_flags)
     return np.where(np.isfinite(z), z, -np.inf)
 
 
-def _load_expr_from_selected(rank: int) -> str:
+def _read_selected_entries() -> list:
     """
-    从 <项目根>/evolve/strategies/selected.json 读取第 rank 名因子的 expr。
-
-    文件按分数降序排列（run_evolution.py 写出），rank=1 即第一名。
+    读取 <项目根>/evolve/strategies/selected.json 原始条目数组（共享解析与校验）。
 
     Raises
     ------
-    FileNotFoundError / ValueError / IndexError — 均带明确原因，由 execute 层转 error 响应。
+    FileNotFoundError / ValueError — 均带明确原因，由 execute 层转 error 响应。
     """
     path = os.path.join(_PROJECT_ROOT, SELECTED_JSON_REL)
     if not os.path.exists(path):
@@ -732,15 +876,50 @@ def _load_expr_from_selected(rank: int) -> str:
         raise ValueError(f"selected.json 解析失败 ({path}): {e}") from e
     if not isinstance(entries, list) or not entries:
         raise ValueError(f"selected.json 为空或格式非法（应为非空数组）: {path}")
+    return entries
+
+
+def _entry_expr(entry: Any) -> str:
+    """selected.json 条目 → 非空 expr 字符串（缺失返回空串）。"""
+    return str(entry.get("expr", "")).strip() if isinstance(entry, dict) else ""
+
+
+def _load_expr_from_selected(rank: int) -> str:
+    """
+    从 selected.json 读取第 rank 名因子的 expr。
+
+    文件按分数降序排列（run_evolution.py 写出），rank=1 即第一名。
+
+    Raises
+    ------
+    FileNotFoundError / ValueError / IndexError — 均带明确原因，由 execute 层转 error 响应。
+    """
+    entries = _read_selected_entries()
     if not 1 <= int(rank) <= len(entries):
         raise IndexError(
             f"factor_from_selected={rank} 超出范围（selected.json 共 {len(entries)} 名）"
         )
-    entry = entries[int(rank) - 1]
-    expr = str(entry.get("expr", "")).strip() if isinstance(entry, dict) else ""
+    expr = _entry_expr(entries[int(rank) - 1])
     if not expr:
         raise ValueError(f"selected.json 第 {rank} 名缺少 expr 字段")
     return expr
+
+
+def _load_topk_exprs_from_selected(k: int) -> list[str]:
+    """
+    top_k_combine 合成模式：读取 selected.json 前 k 名的 expr 列表。
+
+    可用 expr 少于 2 个（文件缺失/为空/条目缺 expr/不足 k 条时按实际条数截取）
+    → ValueError，单因子无合成意义，由 execute 层转 error 响应。
+    """
+    entries = _read_selected_entries()
+    exprs = [e for e in (_entry_expr(en) for en in entries[: max(int(k), 0)]) if e]
+    if len(exprs) < 2:
+        raise ValueError(
+            f"selected.json 前 {k} 名可用 expr 不足 2 个"
+            f"（实际 {len(exprs)} 个），无法多因子等权合成"
+        )
+    return exprs
 
 
 def _build_aligned_panel(dp: Any, codes: list[str], start_date: str, end_date: str) -> tuple[
@@ -1113,6 +1292,7 @@ class RunBacktestTool(BaseTool):
         engine_tag: str = "real",
         data_end: str = "",
         signal_expr: str = "",
+        signal_exprs: list[str] | None = None,
     ) -> str:
         """sha256 策略指纹（含 constraints/引擎标识/数据末端/代码版本/信号表达式，防张冠李戴命中）"""
         factors = []
@@ -1121,6 +1301,7 @@ class RunBacktestTool(BaseTool):
                 {"name": f.name, "weight": f.weight, "direction": f.direction}
                 for f in strategy_config.factors
             ]
+        exprs = [str(e) for e in (signal_exprs or [])]
         data = {
             "strategy": strategy_config.name if strategy_config else "default",
             "factors": factors,
@@ -1137,6 +1318,13 @@ class RunBacktestTool(BaseTool):
             "signal_sha1": (
                 hashlib.sha1(signal_expr.encode("utf-8")).hexdigest()
                 if signal_expr else ""
+            ),
+            # 多因子合成指纹：exprs 列表（有序）整体 sha1
+            "exprs_sha1": (
+                hashlib.sha1(
+                    json.dumps(exprs, ensure_ascii=False).encode("utf-8")
+                ).hexdigest()
+                if exprs else ""
             ),
         }
         raw = json.dumps(data, sort_keys=True, ensure_ascii=False)
@@ -1215,34 +1403,62 @@ class RunBacktestTool(BaseTool):
         commission: CommissionInfo | None = None,
         signal_expr: str = "",
         factor_from_selected: int = 0,
+        signal_exprs: list[str] | None = None,
+        top_k_combine: bool = False,
     ) -> Trader3Response:
         """
         执行回测（M8: 真实 qlib 数据优先 → 向量化合成回退 + 缓存）。
 
-        信号源（post-audit-5）：
-        - signal_expr 非空：用 evolve GP 语法表达式在真实对齐面板上求值，
-          归一化后替代动量进入同一 pending 权重模拟（仅真实数据路径支持；
-          表达式解析/求值失败或全 NaN → error 响应）。
-        - factor_from_selected > 0：读取 <项目根>/evolve/strategies/selected.json
-          第 N 名因子的 expr 作为 signal_expr（覆盖显式传入的 signal_expr；
-          文件缺失/为空/越界 → error 响应）。
-        - 两者均缺省：走默认 20 日动量逻辑（完全兼容旧行为）。
+        信号源优先级（高 → 低，post-audit-6）：
+        1. signal_expr 非空：单表达式模式 —— evolve GP 语法表达式在真实对齐面板上
+           求值，归一化后替代动量进入同一 pending 权重模拟（仅真实数据路径支持；
+           表达式解析/求值失败或全 NaN → error 响应）。此时忽略
+           signal_exprs / factor_from_selected / top_k_combine。
+        2. 否则 signal_exprs 非空：多因子等权合成模式 —— 每个表达式在同一面板上
+           求值并逐日横截面 z-score，NaN 跳过按可用因子数归一合成；caveat 标注
+           "多因子等权合成: K=<N> 个表达式"。
+        3. 否则 top_k_combine=True：读 selected.json 前 N 名做合成
+           （N=factor_from_selected>0 时取之，否则默认 3；文件缺失或可用 expr
+           不足 2 个 → error 响应）。
+        4. 否则 factor_from_selected>0：读取 selected.json 第 N 名因子的 expr 作为
+           单表达式（文件缺失/为空/越界 → error 响应）。
+        5. 均缺省：走默认 20 日动量逻辑（完全兼容旧行为）。
 
-        缓存：指纹含 signal_expr 的 sha1，不同信号源互不命中。
+        缓存：指纹含 signal_expr 的 sha1 与 signal_exprs 列表整体的 sha1，
+        不同信号源互不命中。
         """
         # ── 信号源解析（先于指纹与缓存；selected.json 加载失败直接报错）──
-        if int(factor_from_selected) > 0:
-            try:
-                signal_expr = _load_expr_from_selected(int(factor_from_selected))
-            except Exception as e:
-                return Trader3Response.error(f"selected.json 因子加载失败: {e}")
-
         signal_expr = str(signal_expr or "").strip()
+        if isinstance(signal_exprs, str):
+            signal_exprs = [signal_exprs]
+        raw_exprs = [
+            str(e).strip() for e in (signal_exprs or []) if str(e or "").strip()
+        ]
+        expr_list: list[str] = []
+
         if signal_expr:
             try:
                 _prepare_expr(signal_expr)  # 语法预检（快速失败，不做 IO）
             except _SignalExprError as e:
                 return Trader3Response.error(f"信号表达式错误: {e}")
+        elif raw_exprs:
+            expr_list = raw_exprs
+            for expr in expr_list:
+                try:
+                    _prepare_expr(expr)
+                except _SignalExprError as e:
+                    return Trader3Response.error(f"信号表达式错误: {e}")
+        elif top_k_combine:
+            k_top = int(factor_from_selected) if int(factor_from_selected) > 0 else 3
+            try:
+                expr_list = _load_topk_exprs_from_selected(k_top)
+            except Exception as e:
+                return Trader3Response.error(f"selected.json 多因子加载失败: {e}")
+        elif int(factor_from_selected) > 0:
+            try:
+                signal_expr = _load_expr_from_selected(int(factor_from_selected))
+            except Exception as e:
+                return Trader3Response.error(f"selected.json 因子加载失败: {e}")
 
         # 先探测引擎与数据末端，指纹含 engine_tag，避免真实/合成结果串缓存
         engine_tag, data_end = self._probe_engine()
@@ -1250,7 +1466,7 @@ class RunBacktestTool(BaseTool):
             strategy_config, universe, start_date, end_date,
             constraints, benchmark, commission,
             engine_tag=engine_tag, data_end=data_end,
-            signal_expr=signal_expr,
+            signal_expr=signal_expr, signal_exprs=expr_list,
         )
 
         cached = self._load_cache(fp)
@@ -1261,13 +1477,13 @@ class RunBacktestTool(BaseTool):
         try:
             result = self._real_data_backtest(
                 strategy_config, universe, start_date, end_date, constraints, benchmark, commission,
-                signal_expr=signal_expr,
+                signal_expr=signal_expr, signal_exprs=expr_list,
             )
         except _SignalExprError as e:
             # 表达式字段缺失/求值失败/全 NaN —— 明确报错，不静默换信号源
             return Trader3Response.error(f"信号表达式错误: {e}")
         except Exception as e:
-            if signal_expr:
+            if signal_expr or expr_list:
                 # 自定义表达式依赖真实面板（close/volume 等），合成路径无对应数据，
                 # 静默回退会悄悄丢弃用户的信号定义 → 显式报错
                 return Trader3Response.error(
@@ -1301,14 +1517,16 @@ class RunBacktestTool(BaseTool):
         benchmark: str,
         commission: CommissionInfo | None = None,
         signal_expr: str = "",
+        signal_exprs: list[str] | None = None,
     ) -> Trader3Response:
         """
         基于真实 qlib 数据的回测。
 
         策略：动量因子（20日收益率）选股，月频调仓，等权持有；
-        signal_expr 非空时以表达式因子（evolve GP 语法，在真实对齐面板上求值）
-        替代动量打分，其余模拟语义不变。
-        基准：CSI300 指数（或用户指定）。
+        signal_expr 非空时以单表达式因子替代动量打分；
+        signal_exprs 非空时逐表达式求值并逐日横截面 z-score 等权合成
+        （无效处置 NaN 跳过、按可用因子数归一；全无效日分数 NaN → 选股 -inf 排除）；
+        其余模拟语义不变。基准：CSI300 指数（或用户指定）。
         """
         from trader3.data_provider import QlibDataProvider
 
@@ -1366,9 +1584,10 @@ class RunBacktestTool(BaseTool):
         benchmark_prices = 100.0 * np.cumprod(1.0 + bench_returns)
 
         # ── 组合模拟（月频调仓；与合成引擎共用执行语义）──
-        # 信号源：默认 20 日动量；signal_expr 非空时在真实对齐面板上求值表达式因子
+        # 信号源：默认 20 日动量；signal_expr 单表达式 / signal_exprs 多因子等权合成
         n_hold = min(max(len(codes_list) // 5, 10), 50)
         score_matrix = None
+        multi_caveat = ""
         if signal_expr:
             node = _prepare_expr(signal_expr)
             expr_fields = _collect_expr_fields(node)
@@ -1380,6 +1599,25 @@ class RunBacktestTool(BaseTool):
                     _load_expression_panels(dp, codes_list, time_axis, extra_fields)
                 )
             score_matrix = _expr_scores(node, expr_panels, valid_flags)
+        elif signal_exprs:
+            nodes = [_prepare_expr(e) for e in signal_exprs]
+            union_fields: set[str] = set()
+            for node in nodes:
+                union_fields |= _collect_expr_fields(node)
+            close_panel = np.where(close_matrix > 0, close_matrix, np.nan)
+            extra_fields = {f for f in union_fields if f != "close"}
+            expr_panels = {"close": close_panel}
+            if extra_fields:
+                expr_panels.update(
+                    _load_expression_panels(dp, codes_list, time_axis, extra_fields)
+                )
+            z_stack = np.stack(
+                [_expr_zscores(node, expr_panels, valid_flags) for node in nodes]
+            )
+            combined = _combine_factor_scores(z_stack)
+            # 全因子无效日分数为 NaN → 选股时视为 -inf 排除
+            score_matrix = np.where(np.isfinite(combined), combined, -np.inf)
+            multi_caveat = f"多因子等权合成: K={len(nodes)} 个表达式"
 
         equity, port_returns, turnover_total, positive_days, sim_stats = (
             _run_momentum_backtest(
@@ -1415,7 +1653,11 @@ class RunBacktestTool(BaseTool):
             (
                 SIGNAL_SOURCE_CAVEAT_FMT.format(expr=signal_expr)
                 if signal_expr else
-                "策略：20日动量因子，月频调仓，等权持有（信号次日生效，无同日前视）"
+                (
+                    multi_caveat
+                    if multi_caveat else
+                    "策略：20日动量因子，月频调仓，等权持有（信号次日生效，无同日前视）"
+                )
             ),
             "已扣除印花税/佣金/冲击成本",
             "未处理停牌；涨跌停按板块幅度拦截（ST 无法从代码判断，统一按板块幅度处理）",
@@ -1665,6 +1907,23 @@ class WalkForwardAnalysisTool(BaseTool):
         oos_mean_return = _annualized_return(oos_concat)
         oos_sharpe = _annualized_sharpe(oos_concat)
 
+        # ── Deflated Sharpe：n_trials 取滚动窗口数（每窗配置算一次试验的诚实下界），
+        #    sr_variance 用各窗 OOS Sharpe（年化→日频）的样本方差 ──
+        sqrt_ann = math.sqrt(TRADING_DAYS_PER_YEAR)
+        window_sr_daily = np.asarray(oos_sharpes, dtype=np.float64) / sqrt_ann
+        sr_variance = (
+            float(np.var(window_sr_daily, ddof=1)) if window_sr_daily.size >= 2 else None
+        )
+        dsr_value = deflated_sharpe_ratio(
+            sharpe_observed=oos_sharpe / sqrt_ann,
+            n_trials=len(windows),
+            sr_variance=sr_variance,
+            tail_risk_adj=True,
+            returns=oos_concat if oos_concat.size else None,
+            n_periods=int(oos_concat.size),
+        )
+        dsr_caveat = f"DSR={dsr_value:.2f}（已校正 {len(windows)} 次试验的多重比较）"
+
         if mean_is_sr > 1e-10:
             overfitting_probability = min(
                 max(0.0, 1.0 - oos_sharpe / mean_is_sr), 1.0
@@ -1694,6 +1953,7 @@ class WalkForwardAnalysisTool(BaseTool):
             "WFA 含单边成本与首日涨跌停约束"
             "（测试段首日按主循环规则执行建仓并扣 DEFAULT_COSTS 换手成本，段内不调仓）",
             "过拟合概率基于 IS/OOS 夏普比衰减: max(0, 1 - OOS_Sharpe / IS_Sharpe)",
+            dsr_caveat,
         ]
         if eff_step < test_window:
             caveats.insert(
@@ -1719,6 +1979,7 @@ class WalkForwardAnalysisTool(BaseTool):
                 "参数稳定性": report.parameter_stability,
                 "过拟合概率": report.overfitting_probability,
                 "OOS交易日": int(oos_concat.size),
+                "dsr": dsr_value,
             },
             caveats=caveats,
         )
