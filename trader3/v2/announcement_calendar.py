@@ -20,8 +20,6 @@ A股财报公告规律（用于合成公告日兜底）：
 from __future__ import annotations
 
 import logging
-import sqlite3
-from typing import Dict, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -55,7 +53,7 @@ def _norm_code(code: str) -> str:
 _EXPLICIT_CACHE: dict = {"key": None, "data": None}
 
 
-def _load_explicit_calendar() -> Dict[str, Dict[str, str]]:
+def _load_explicit_calendar() -> dict[str, dict[str, str]]:
     """读取 data/disclosure_calendar.json（{code:{quarter:announce_date}}），mtime 缓存。
 
     disclosure_sync 缺失或文件缺失时返回 {}，不影响推断兜底。
@@ -72,7 +70,7 @@ def _load_explicit_calendar() -> Dict[str, Dict[str, str]]:
         pass
     if _EXPLICIT_CACHE["key"] == key:
         return _EXPLICIT_CACHE["data"]
-    data: Dict[str, Dict[str, str]] = {}
+    data: dict[str, dict[str, str]] = {}
     try:
         from trader3.v2.disclosure_sync import load_explicit_calendar
         loaded = load_explicit_calendar()
@@ -104,7 +102,7 @@ class AnnouncementCalendar:
         """报告期 quarter → 公告日（显式日历优先，规律兜底）"""
         return _resolve_announce(code, quarter)[0]
 
-    def latest_asof(self, code: str, asof_date: str) -> Optional[str]:
+    def latest_asof(self, code: str, asof_date: str) -> str | None:
         """asof 日前最新的可用 quarter（公告日 ≤ asof）"""
         try:
             quarters = self.fp.available_quarters(code)

@@ -17,7 +17,6 @@ from __future__ import annotations
 import html as html_mod
 import logging
 import re
-from typing import List, Tuple
 from urllib.parse import urlencode
 
 logger = logging.getLogger("trader3.v2.search")
@@ -27,7 +26,7 @@ def _clean_title(raw: str) -> str:
     return html_mod.unescape(re.sub(r"<[^>]+>", "", raw)).strip()
 
 
-def ddg_websearch(query: str, limit: int = 8, timeout: int = 12) -> List[Tuple[str, str]]:
+def ddg_websearch(query: str, limit: int = 8, timeout: int = 12) -> list[tuple[str, str]]:
     """
     DDG HTML 端点网页搜索。返回 [(title, url)]。
 

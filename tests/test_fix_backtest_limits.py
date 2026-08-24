@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 A股交易约束修复验证（backtest 涨跌停可成交性 + 现金跟踪）：
 
@@ -8,8 +7,8 @@ A股交易约束修复验证（backtest 涨跌停可成交性 + 现金跟踪）�
 4. test_prefix_ratio_wired_through_sim — 板块幅度经 codes 参数接入模拟（30x 股 -11% 不构成跌停）
 5. test_limit_caveat_formatting       — 报告 caveats 文案与现金比例标注规则
 """
-import sys
 import os
+import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 

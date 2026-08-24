@@ -26,7 +26,7 @@ print(f"  >>> 年化收益: {result.key_metrics.get('年化收益', 0):.1%}")
 print(f"  >>> 夏普: {result.key_metrics.get('夏普比', 0):.2f}")
 print(f"  >>> 最大回撤: {result.key_metrics.get('最大回撤', 0):.1%}")
 print(f"  >>> 净值曲线点数: {len(result.data.equity_curve)}")
-print(f"\n  报告引用格式:")
+print("\n  报告引用格式:")
 print(f'    "3号交易员回测，过去 6 年年化 {result.key_metrics.get("年化收益", 0):.1%}，'
       f'夏普 {result.key_metrics.get("夏普比", 0):.2f}，最大回撤 {result.key_metrics.get("最大回撤", 0):.1%}"')
 
@@ -39,7 +39,7 @@ print("=" * 70)
 
 result = t3.walk_forward_analysis(train_window=252, test_window=63)
 print(f"\n  >>> 结论: {result.summary}")
-print(f"\n  报告引用格式:")
+print("\n  报告引用格式:")
 print(f'    "3号交易员 WFA 样本外年化 {result.key_metrics.get("样本外收益", 0):.1%}，'
       f'过拟合概率 {result.key_metrics.get("过拟合概率", 0):.0%}"')
 
@@ -92,7 +92,7 @@ sell = t3.estimate_transaction_cost(
 )
 print(f"  买入: {buy.summary}")
 print(f"  卖出: {sell.summary}（含印花税 {sell.key_metrics.get('印花税(bp)', 0):.0f}bp）")
-print(f"\n  报告引用格式:")
+print("\n  报告引用格式:")
 print(f'    "建仓 500 万，3号交易员估算预期交易成本 {buy.key_metrics.get("总成本(bp)", 0):.0f}bp'
       f'（约 ¥{buy.key_metrics.get("总成本(元)", 0):,.0f}），建议分批执行"')
 
@@ -120,7 +120,7 @@ print("=" * 70)
 
 result = t3.validate_signal(signal_name="动量因子")
 print(f"\n  >>> 结论: {result.summary}")
-print(f"\n  报告引用格式:")
+print("\n  报告引用格式:")
 print(f'    "3号交易员验证，该因子 ICIR={result.key_metrics.get("ICIR", 0):.2f}，'
       f'半衰期 {result.key_metrics.get("半衰期(月)", 0):.1f} 个月，拥挤度低"')
 
@@ -135,7 +135,7 @@ result = t3.diagnose_market_regime()
 print(f"\n  >>> 结论: {result.summary}")
 print(f"  >>> 状态概率: {result.data.regime_probabilities}")
 print(f"  >>> 建议仓位: {result.key_metrics.get('建议仓位', 0):.0%}")
-print(f"\n  报告引用格式:")
+print("\n  报告引用格式:")
 print(f'    "3号交易员判定当前为 {result.key_metrics.get("当前状态", "?")} '
       f'（P={result.key_metrics.get("最大概率", 0):.0%}），'
       f'建议仓位 {result.key_metrics.get("建议仓位", 0):.0%}"')
@@ -149,7 +149,7 @@ print("=" * 70)
 
 result = t3.valuation_anchor(codes=["301150.SZ"])
 print(f"\n  >>> 结论: {result.summary}")
-print(f"\n  报告引用格式:")
+print("\n  报告引用格式:")
 print(f'    "3号交易员 DCF 测算，Base 目标价 ¥{result.key_metrics.get("Base", 0):.1f}，'
       f'Bull ¥{result.key_metrics.get("Bull", 0):.1f}，Bear ¥{result.key_metrics.get("Bear", 0):.1f}，'
       f'隐含收益率 {result.key_metrics.get("隐含收益率", 0):.1%}"')

@@ -1,10 +1,12 @@
 """股本/市值/comps 验证"""
-import sys, os
+import os
+import sys
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 os.environ["AKSHARE_NO_PROXY"] = "1"
 
-from trader3.v2.market_data import get_quote
 from trader3.v2.comps import get_comps_analyzer
+from trader3.v2.market_data import get_quote
 
 q = get_quote("600519")
 print("茅台快照:", q.get("name"), "价", q.get("price"),

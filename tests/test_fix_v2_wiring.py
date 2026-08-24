@@ -157,10 +157,10 @@ def offline_pipeline(monkeypatch):
     tmp = tempfile.mkdtemp()
 
     import trader3.v2.collector as collector_mod
-    import trader3.v2.watchlist as watchlist_mod
-    import trader3.v2.trigger as trigger_mod
-    import trader3.v2.qa_accessor as qa_mod
     import trader3.v2.daily_pipeline as dp_mod
+    import trader3.v2.qa_accessor as qa_mod
+    import trader3.v2.trigger as trigger_mod
+    import trader3.v2.watchlist as watchlist_mod
     from trader3.v2.watchlist import WatchlistDB
 
     monkeypatch.setattr(collector_mod, "DataCollector", _FakeCollector)
@@ -187,7 +187,7 @@ class TestPaperTradeRecordWritten:
         path = os.path.join(paper_dir, "account.json")
         assert os.path.exists(path), "account.json 未落盘"
 
-        with open(path, "r", encoding="utf-8") as f:
+        with open(path, encoding="utf-8") as f:
             data = json.load(f)
         for key in ("as_of", "date", "cash", "positions",
                     "trades_today", "equity"):

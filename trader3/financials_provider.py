@@ -13,10 +13,8 @@ from __future__ import annotations
 
 import os
 import sqlite3
-from typing import Dict, List, Optional
 
 import numpy as np
-
 
 # 默认财务数据库路径
 DEFAULT_FINANCIALS_DB = os.environ.get(
@@ -25,7 +23,7 @@ DEFAULT_FINANCIALS_DB = os.environ.get(
         os.path.join(os.path.dirname(__file__), "..", "..", "2hao-analyst", "data", "financials.db")
     ),
 )
-_ALT_DBS: List[str] = []
+_ALT_DBS: list[str] = []
 
 
 class FinancialsProvider:
@@ -38,11 +36,11 @@ class FinancialsProvider:
         hist = fp.get_history('600519', 'profit', 'roeAvg')
     """
 
-    def __init__(self, db_path: Optional[str] = None):
+    def __init__(self, db_path: str | None = None):
         self.db_path = self._resolve_db_path(db_path)
-        self._conn: Optional[sqlite3.Connection] = None
+        self._conn: sqlite3.Connection | None = None
 
-    def _resolve_db_path(self, db_path: Optional[str]) -> str:
+    def _resolve_db_path(self, db_path: str | None) -> str:
         if db_path and os.path.exists(db_path):
             return db_path
         if os.path.exists(DEFAULT_FINANCIALS_DB):
@@ -69,7 +67,7 @@ class FinancialsProvider:
             c = c[2:]
         return c
 
-    def available_quarters(self, code: str) -> List[str]:
+    def available_quarters(self, code: str) -> list[str]:
         """某股票可用的财报期（降序）"""
         conn = self._connect()
         cur = conn.execute(
@@ -78,7 +76,7 @@ class FinancialsProvider:
         )
         return [row[0] for row in cur.fetchall()]
 
-    def get_latest_financials(self, code: str) -> Dict[str, float]:
+    def get_latest_financials(self, code: str) -> dict[str, float]:
         """
         获取某股票最新一期的财务数据（跨 profit/balance/cashflow 表）。
 
@@ -104,7 +102,7 @@ class FinancialsProvider:
         result["quarter"] = latest_q
         return result
 
-    def get_field_history(self, code: str, field: str, table: Optional[str] = None, n: int = 8) -> List[Dict]:
+    def get_field_history(self, code: str, field: str, table: str | None = None, n: int = 8) -> list[dict]:
         """
         获取某字段的历史序列（降序，最新在前）。
 
@@ -129,7 +127,7 @@ class FinancialsProvider:
             )
         return [{"quarter": row[0], "value": row[1]} for row in cur.fetchall()]
 
-    def get_metric(self, code: str, field: str) -> Optional[float]:
+    def get_metric(self, code: str, field: str) -> float | None:
         """获取最新值"""
         fin = self.get_latest_financials(code)
         return fin.get(field)
@@ -153,12 +151,12 @@ class FinancialsProvider:
         except Exception:
             return None, None
 
-    def get_current_price(self, code: str) -> Optional[float]:
+    def get_current_price(self, code: str) -> float | None:
         """从 qlib 行情获取最新收盘价（配套 QlibDataProvider）"""
         price, _ = self.get_current_price_with_date(code)
         return price
 
-    def to_valuation_input(self, code: str) -> Dict:
+    def to_valuation_input(self, code: str) -> dict:
         """
         将真实财务数据转换为 valuation_anchor 需要的输入字典。
 
@@ -172,7 +170,6 @@ class FinancialsProvider:
         result = {}
         # 每股指标（统一以总股本为口径，与市值=价格×总股本一致）
         total_share = fin.get("totalShare") or fin.get("profit.totalShare")
-        liqa_share = fin.get("liqaShare") or fin.get("profit.liqaShare")
 
         price, price_date = self.get_current_price_with_date(code)
         if price:
@@ -240,7 +237,7 @@ class FinancialsProvider:
         result["_quarter"] = fin.get("quarter", "")
         return {k: v for k, v in result.items() if v is not None}
 
-    def describe(self) -> Dict:
+    def describe(self) -> dict:
         """数据库概览"""
         conn = self._connect()
         cur = conn.execute("SELECT COUNT(DISTINCT code) FROM financials")
@@ -257,7 +254,7 @@ class FinancialsProvider:
         }
 
 
-def find_financials_db() -> Optional[str]:
+def find_financials_db() -> str | None:
     """探测可用的财务数据库"""
     for candidate in [DEFAULT_FINANCIALS_DB, *_ALT_DBS]:
         if candidate and os.path.exists(candidate):

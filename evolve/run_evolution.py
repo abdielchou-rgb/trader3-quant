@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """
 run_evolution.py — 策略进化工厂主入口（marvis 调用）
 

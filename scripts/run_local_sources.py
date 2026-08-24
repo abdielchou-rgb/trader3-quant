@@ -34,9 +34,9 @@ os.environ.setdefault("AKSHARE_NO_PROXY", "1")
 logging.basicConfig(level=logging.INFO, format="%(name)s %(levelname)s: %(message)s")
 logger = logging.getLogger("run_local_sources")
 
-from trader3.v2.sources import XueqiuSource, ZhihuSource, GlobalReutersSource
-from trader3.v2.events import Event, get_event_library
 from trader3.v2.collector import CatalystScorer
+from trader3.v2.events import Event, get_event_library
+from trader3.v2.sources import GlobalReutersSource, XueqiuSource, ZhihuSource
 
 
 def _persist(srccode: str, source: str, items, lib) -> int:

@@ -22,7 +22,6 @@ import argparse
 import logging
 import os
 from datetime import datetime, timedelta
-from typing import List, Optional
 
 logger = logging.getLogger("trader3.v2.sync_all")
 
@@ -35,7 +34,7 @@ KLINE_CACHE_DIR = os.path.join(
 
 # ── K线同步（qfq 全窗口 + 原子替换） ──────────────────────
 
-def _replace_cache(code: str, rows: List[List]) -> int:
+def _replace_cache(code: str, rows: list[list]) -> int:
     """整文件原子替换缓存：写临时文件 → os.replace 覆盖正式 CSV。
 
     qfq 前复权全历史重述，禁止追加拼接；os.replace 在同目录内为
@@ -45,9 +44,9 @@ def _replace_cache(code: str, rows: List[List]) -> int:
     os.makedirs(KLINE_CACHE_DIR, exist_ok=True)
     path = os.path.join(KLINE_CACHE_DIR, f"{code}.csv")
     tmp = path + ".tmp"
-    merged: "dict[str, list]" = {}
+    merged: dict[str, list] = {}
     if os.path.exists(path):
-        with open(path, "r", encoding="utf-8") as f:
+        with open(path, encoding="utf-8") as f:
             for ln in f:
                 ln = ln.strip()
                 if ln:
@@ -65,7 +64,7 @@ def _replace_cache(code: str, rows: List[List]) -> int:
     return len(rows)
 
 
-def sync_kline(codes: List[str], days: int = 120, tail: bool = True) -> dict:
+def sync_kline(codes: list[str], days: int = 120, tail: bool = True) -> dict:
     """行情 K 线同步（qfq 全窗口拉取 + 原子替换，不做查尾续拉）。
 
     qfq 前复权因子随分红送转对全历史重述：尾部增量拼接会让除权日前的
@@ -83,7 +82,7 @@ def sync_kline(codes: List[str], days: int = 120, tail: bool = True) -> dict:
     start = (today - timedelta(days=days)).strftime("%Y%m%d")
     end = today.strftime("%Y%m%d")
 
-    def _to_rows(df, source: str) -> List[List]:
+    def _to_rows(df, source: str) -> list[list]:
         """统一映射为 date,open,close,high,low,volume"""
         if source == "eastmoney":
             return [
@@ -135,7 +134,7 @@ def sync_kline(codes: List[str], days: int = 120, tail: bool = True) -> dict:
 
 # ── 事件增量同步（复用 collector 查尾） ───────────────────
 
-def sync_events(codes: Optional[List[str]] = None) -> dict:
+def sync_events(codes: list[str] | None = None) -> dict:
     """事件/公告/龙虎榜/资金流增量采集（collect_state.json 查尾防重）"""
     from trader3.v2.collector import DataCollector
     from trader3.v2.watchlist import get_watchlist
@@ -170,7 +169,7 @@ def sync_financials() -> dict:
 # 默认全部关闭（避免误联网）；参数 enabled 或环境变量 T3_SYNC_<NAME> 开启。
 
 _EXTRA_ENV_PREFIX = "T3_SYNC_"
-_EXTRA_REGISTRY: List[dict] = []
+_EXTRA_REGISTRY: list[dict] = []
 
 
 class ExtraSourceAdapter:
@@ -183,7 +182,7 @@ class ExtraSourceAdapter:
         self.name = src.source_name
         self.availability = getattr(src, "availability", "local")
 
-    def sync(self, codes: List[str], limit: int = 5) -> dict:
+    def sync(self, codes: list[str], limit: int = 5) -> dict:
         out = {}
         for code in codes:
             try:
@@ -196,14 +195,14 @@ class ExtraSourceAdapter:
         return out
 
 
-def _env_enabled(name: str, override: Optional[bool] = None) -> bool:
+def _env_enabled(name: str, override: bool | None = None) -> bool:
     if override is not None:
         return override
     return os.environ.get(_EXTRA_ENV_PREFIX + name.upper(), "").strip().lower() \
         in ("1", "true", "yes")
 
 
-def register_extra_sources(enabled: Optional[bool] = None) -> List[dict]:
+def register_extra_sources(enabled: bool | None = None) -> list[dict]:
     """把 extra_sources 的额外源注册进同步源注册表（重建注册表）。
 
     每个源带名称与开关：默认关；enabled 参数或环境变量 T3_SYNC_<NAME> 开启，
@@ -222,12 +221,12 @@ def register_extra_sources(enabled: Optional[bool] = None) -> List[dict]:
     return list_sync_sources()
 
 
-def list_sync_sources() -> List[dict]:
+def list_sync_sources() -> list[dict]:
     """已注册扩展源概览：[{name, availability, enabled}]"""
     return [{k: v for k, v in e.items() if k != "adapter"} for e in _EXTRA_REGISTRY]
 
 
-def sync_extra_sources(codes: List[str], limit: int = 5) -> dict:
+def sync_extra_sources(codes: list[str], limit: int = 5) -> dict:
     """执行所有已启用扩展源的增量拉取；未启用的跳过并注明开关方法。"""
     results = {}
     for entry in _EXTRA_REGISTRY:

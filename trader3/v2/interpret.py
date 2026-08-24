@@ -19,7 +19,6 @@ import json
 import logging
 import os
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional
 
 from trader3.v2.events import CatalystScorer
 
@@ -28,7 +27,7 @@ logger = logging.getLogger("trader3.v2.interpret")
 LLM_PROVIDER_ENV = "TRADER3_LLM_PROVIDER"   # 可用环境变量显式指定 provider
 
 # provider → 所需环境配置（key/端点/模型各归其位，绝不串用）
-_PROVIDER_CONF: Dict[str, dict] = {
+_PROVIDER_CONF: dict[str, dict] = {
     "deepseek": {
         "key_env": "DEEPSEEK_API_KEY",
         "base_env": "DEEPSEEK_BASE_URL",
@@ -53,7 +52,7 @@ class Interpretation:
     direction: str = "neutral"      # positive / negative / neutral
     catalyst_score: float = 0.5     # 0~1
     category: str = "other"         # 业绩/订单/政策/重组/资金/情绪/其他
-    affected_codes: List[str] = field(default_factory=list)   # 受影响标的
+    affected_codes: list[str] = field(default_factory=list)   # 受影响标的
     reasoning: str = ""             # 一句话解读
     model: str = "rules"            # llm / rules
 
@@ -67,7 +66,7 @@ class Interpretation:
 
 # ── LLM 提供者（优先用 Claude 自身能力，退化到规则） ──
 
-def resolve_provider(explicit: Optional[str] = None) -> str:
+def resolve_provider(explicit: str | None = None) -> str:
     """解析 LLM provider：显式参数 > 环境变量 > 按 key 自动选择。
 
     返回 "deepseek" / "openai"；无法确定时返回 ""。
@@ -84,7 +83,7 @@ def resolve_provider(explicit: Optional[str] = None) -> str:
     return ""
 
 
-def _extract_first_json(text: str) -> Optional[dict]:
+def _extract_first_json(text: str) -> dict | None:
     """从首个 { 起做 brace-counting，提取第一个完整 JSON 对象。
 
     修复原 re.search(r"\\{.*\\}", DOTALL) 贪婪匹配会把文本中
@@ -123,8 +122,8 @@ def _extract_first_json(text: str) -> Optional[dict]:
     return None
 
 
-def _try_llm(text: str, provider: Optional[str] = None,
-             timeout: float = 15.0) -> Optional[dict]:
+def _try_llm(text: str, provider: str | None = None,
+             timeout: float = 15.0) -> dict | None:
     """
     尝试用 LLM 解读。返回 {direction, score, category, codes, reasoning} 或 None。
 
@@ -176,7 +175,7 @@ class Interpreter:
     """事件解读器：LLM 优先，规则兜底"""
 
     def __init__(self, use_rules_fallback: bool = True,
-                 llm_provider: Optional[str] = None):
+                 llm_provider: str | None = None):
         self.scorer = CatalystScorer()
         self.use_rules_fallback = use_rules_fallback
         self.llm_provider = llm_provider   # None = 按环境自动选择

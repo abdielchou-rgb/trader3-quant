@@ -7,8 +7,14 @@ import tempfile
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from trader3.v2.watchlist import (
-    ALERT, ATTENTION, BUY_ZONE, HOLDING, OBSERVING, SELL_TRIGGERED, UNTRACKED,
-    TRANSITIONS, PRIORITY, WatchlistDB,
+    ALERT,
+    ATTENTION,
+    BUY_ZONE,
+    HOLDING,
+    OBSERVING,
+    SELL_TRIGGERED,
+    TRANSITIONS,
+    WatchlistDB,
 )
 
 

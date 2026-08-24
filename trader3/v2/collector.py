@@ -20,11 +20,10 @@ import os
 import random
 import time
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional
 
 os.environ.setdefault("AKSHARE_NO_PROXY", "1")
 
-from trader3.v2.events import CatalystScorer, Event, EventLibrary, get_event_library
+from trader3.v2.events import CatalystScorer, Event, get_event_library
 
 logger = logging.getLogger("trader3.v2.collector")
 
@@ -54,7 +53,7 @@ COLLECT_STATE_FILE = os.path.join(
 
 def _load_state() -> dict:
     try:
-        with open(COLLECT_STATE_FILE, "r", encoding="utf-8") as f:
+        with open(COLLECT_STATE_FILE, encoding="utf-8") as f:
             return json.load(f)
     except Exception:
         return {}
@@ -92,7 +91,7 @@ class DataCollector:
                 logger.warning("[collector] akshare 未安装，跳过 akshare 源")
         self._session = None
         self._ua_cycle = itertools.cycle(USER_AGENTS)
-        self._fail_counts: Dict[str, int] = {}   # 每源连续失败计数
+        self._fail_counts: dict[str, int] = {}   # 每源连续失败计数
 
     def _next_ua(self) -> str:
         """UA 小列表轮换（避免固定单一指纹）"""
@@ -179,7 +178,7 @@ class DataCollector:
         added += self._collect_zt_pool()
         return added
 
-    def scan_and_library(self, watchlist_codes: List[str]) -> Dict[str, List[Event]]:
+    def scan_and_library(self, watchlist_codes: list[str]) -> dict[str, list[Event]]:
         """扫描自选股全部事件并入库，返回 每只股票最近事件"""
         for code in watchlist_codes:
             self.collect_stock(code)
@@ -361,7 +360,6 @@ class DataCollector:
                 code = str(item.get("c", ""))
                 name = str(item.get("n", ""))
                 zdp = item.get("zdp", 0)
-                ly = str(item.get("lbc", "未知"))  # 连板数类字段
                 if not code.isdigit():
                     continue
                 ev = Event(

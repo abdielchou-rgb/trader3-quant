@@ -27,13 +27,12 @@ from __future__ import annotations
 
 import math
 import zlib
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 import numpy as np
 
 from trader3.base_tool import BaseTool, ChartSpec, Trader3Response
 from trader3.models import PrivateCompanyBridge, ScorecardReport, ValuationReport
-
 
 # ═══════════════════════════════════════════
 # Constants
@@ -128,7 +127,7 @@ def _gen_ev_history(
     return np.maximum(np.array(vals, dtype=np.float64), 1.0)
 
 
-def _synthetic_financials(code: str) -> Dict[str, Any]:
+def _synthetic_financials(code: str) -> dict[str, Any]:
     """
     Generate a coherent synthetic financial profile for a stock code.
 
@@ -248,7 +247,7 @@ def _synthetic_financials(code: str) -> Dict[str, Any]:
     }
 
 
-def _fill_financials(user_fin: Optional[Dict], code: str) -> Tuple[Dict[str, Any], bool, set]:
+def _fill_financials(user_fin: dict | None, code: str) -> tuple[dict[str, Any], bool, set]:
     """
     Merge user-provided financials over the synthetic profile.
 
@@ -302,7 +301,7 @@ def _fill_financials(user_fin: Optional[Dict], code: str) -> Tuple[Dict[str, Any
 # ═══════════════════════════════════════════
 
 
-def _compute_wacc(fin: Dict[str, Any]) -> Tuple[float, float]:
+def _compute_wacc(fin: dict[str, Any]) -> tuple[float, float]:
     """WACC = cost_of_equity * E/(E+D) + cost_of_debt * (1-tax) * D/(E+D)."""
     rf = fin.get("rf", 0.025)
     erp = fin.get("erp", 0.06)
@@ -348,7 +347,7 @@ def _dcf_value(
     return float(pv)
 
 
-def _dcf_valuation(fin: Dict[str, Any], wacc: float) -> Dict[str, float]:
+def _dcf_valuation(fin: dict[str, Any], wacc: float) -> dict[str, float]:
     """Base-case DCF with configured growth assumptions."""
     fcf_0 = fin.get("fcf_per_share", 1.0)
     growth = fin.get("fcf_growth_5y", 0.10)
@@ -364,7 +363,7 @@ def _dcf_valuation(fin: Dict[str, Any], wacc: float) -> Dict[str, float]:
     }
 
 
-def _dcf_scenarios(fin: Dict[str, Any], wacc: float) -> Dict[str, float]:
+def _dcf_scenarios(fin: dict[str, Any], wacc: float) -> dict[str, float]:
     """Base / Bull / Bear DCF fair values under different FCF growth assumptions."""
     fcf_0 = fin.get("fcf_per_share", 1.0)
     base_growth = fin.get("fcf_growth_5y", 0.10)
@@ -386,7 +385,7 @@ def _dcf_scenarios(fin: Dict[str, Any], wacc: float) -> Dict[str, float]:
     }
 
 
-def _dcf_sensitivity(fin: Dict[str, Any], wacc: float) -> Dict[str, List[float]]:
+def _dcf_sensitivity(fin: dict[str, Any], wacc: float) -> dict[str, list[float]]:
     """
     Sensitivity: WACC grid (±100bp / ±50bp) and terminal-growth grid (±0.5%).
     Each entry is the DCF target price under the perturbed assumption.
@@ -419,7 +418,7 @@ def _dcf_sensitivity(fin: Dict[str, Any], wacc: float) -> Dict[str, List[float]]
 # ═══════════════════════════════════════════
 
 
-def _pe_percentile_valuation(fin: Dict[str, Any]) -> Dict[str, Any]:
+def _pe_percentile_valuation(fin: dict[str, Any]) -> dict[str, Any]:
     """PE percentile: current PE vs 5y historical PE distribution (synthetic)."""
     current_pe = fin.get("pe", 20.0)
     eps = fin.get("eps", 1.0)
@@ -447,7 +446,7 @@ def _pe_percentile_valuation(fin: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def _pb_roe_valuation(fin: Dict[str, Any]) -> Dict[str, Any]:
+def _pb_roe_valuation(fin: dict[str, Any]) -> dict[str, Any]:
     """
     PB-ROE: target P/B = ROE / r, where r is the required return implied from PE
     (r = earnings yield = 1 / current PE).
@@ -468,7 +467,7 @@ def _pb_roe_valuation(fin: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def _ev_ebitda_valuation(fin: Dict[str, Any]) -> Dict[str, Any]:
+def _ev_ebitda_valuation(fin: dict[str, Any]) -> dict[str, Any]:
     """EV/EBITDA: historical mean + sector premium."""
     price = fin.get("current_price", 50.0)
     net_debt_ps = fin.get("net_debt_per_share", 0.0)
@@ -494,7 +493,7 @@ def _ev_ebitda_valuation(fin: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def _compute_all_valuations(fin: Dict[str, Any]) -> Tuple[Dict[str, Dict], Dict[str, Any]]:
+def _compute_all_valuations(fin: dict[str, Any]) -> tuple[dict[str, dict], dict[str, Any]]:
     """Run all four valuation methods + WACC. Returns (methods, aux)."""
     wacc, cost_of_equity = _compute_wacc(fin)
 
@@ -524,13 +523,13 @@ _METHOD_REQUIRED_REAL_FIELDS = {
 
 
 def _gate_methods_by_provenance(
-    methods_all: Dict[str, Dict],
-    selected: List[str],
+    methods_all: dict[str, dict],
+    selected: list[str],
     synthetic_fields: set,
-) -> Tuple[List[str], List[Tuple[str, List[str]]]]:
+) -> tuple[list[str], list[tuple[str, list[str]]]]:
     """禁用关键输入来自合成档案的估值方法，返回 (保留方法, 禁用明细)。"""
-    disabled: List[Tuple[str, List[str]]] = []
-    kept: List[str] = []
+    disabled: list[tuple[str, list[str]]] = []
+    kept: list[str] = []
     for m in selected:
         missing = sorted(_METHOD_REQUIRED_REAL_FIELDS.get(m, set()) & synthetic_fields)
         if missing:
@@ -541,9 +540,9 @@ def _gate_methods_by_provenance(
 
 
 def _weighted_target(
-    methods: Dict[str, Dict],
-    selected: List[str],
-) -> Tuple[float, Dict[str, float]]:
+    methods: dict[str, dict],
+    selected: list[str],
+) -> tuple[float, dict[str, float]]:
     """Weighted average across methods (weights renormalized over selection)."""
     weights = DCF_METHOD_WEIGHTS
     chosen = [m for m in selected if m in weights]
@@ -564,7 +563,7 @@ def _clip10(x: float) -> float:
     return float(np.clip(x, 0.0, 10.0))
 
 
-def _score_profitability(fin: Dict[str, Any]) -> float:
+def _score_profitability(fin: dict[str, Any]) -> float:
     roe = fin.get("roe", 0.10)
     gross_margin = fin.get("gross_margin", 0.35)
     net_margin = fin.get("net_margin", 0.10)
@@ -583,7 +582,7 @@ def _score_profitability(fin: Dict[str, Any]) -> float:
     return round(_clip10(0.5 * roe_score + 0.3 * margin_score + 0.2 * trend_score), 1)
 
 
-def _score_growth(fin: Dict[str, Any]) -> float:
+def _score_growth(fin: dict[str, Any]) -> float:
     rev_cagr = fin.get("revenue_cagr", 0.10)
     earn_cagr = fin.get("earnings_cagr", 0.10)
     rev_growth_list = fin.get("revenue_growth_list", [0.10] * 5)
@@ -595,7 +594,7 @@ def _score_growth(fin: Dict[str, Any]) -> float:
     return round(_clip10(0.4 * rev_score + 0.4 * earn_score + 0.2 * consistency * 10.0), 1)
 
 
-def _score_financial_health(fin: Dict[str, Any]) -> float:
+def _score_financial_health(fin: dict[str, Any]) -> float:
     de = fin.get("debt_to_equity", 0.5)
     cr = fin.get("current_ratio", 1.5)
     fcf_conv = fin.get("fcf_conversion", 1.0)
@@ -607,7 +606,7 @@ def _score_financial_health(fin: Dict[str, Any]) -> float:
     return round(_clip10(0.4 * de_score + 0.3 * cr_score + 0.3 * fcf_score), 1)
 
 
-def _score_valuation_dim(fin: Dict[str, Any]) -> float:
+def _score_valuation_dim(fin: dict[str, Any]) -> float:
     current_pe = fin.get("pe", 20.0)
     hist = np.asarray(fin.get("pe_history", [current_pe]), dtype=np.float64)
     percentile = float(np.mean(hist < current_pe))
@@ -621,8 +620,8 @@ def _score_valuation_dim(fin: Dict[str, Any]) -> float:
     return round(_clip10(score), 1)
 
 
-def _detect_red_flags(fin: Dict[str, Any]) -> List[str]:
-    flags: List[str] = []
+def _detect_red_flags(fin: dict[str, Any]) -> list[str]:
+    flags: list[str] = []
 
     # 1) Accounts receivable growth >> revenue growth
     ar_list = fin.get("ar_list", [])
@@ -652,7 +651,7 @@ def _detect_red_flags(fin: Dict[str, Any]) -> List[str]:
     ocf = fin.get("ocf_list", [])
     ni = fin.get("net_income_list", [])
     if len(ocf) >= 2 and len(ni) >= 2:
-        weak = sum(1 for o, n in zip(ocf[-2:], ni[-2:]) if o < n)
+        weak = sum(1 for o, n in zip(ocf[-2:], ni[-2:], strict=False) if o < n)
         if weak >= 2:
             flags.append("经营性现金流连续 2 年低于净利润")
 
@@ -661,9 +660,9 @@ def _detect_red_flags(fin: Dict[str, Any]) -> List[str]:
 
 def _build_peer_comparison(
     overall_score: float,
-    peer_data: Optional[List[dict]],
+    peer_data: list[dict] | None,
     code: str,
-) -> Dict[str, float]:
+) -> dict[str, float]:
     """Peer comparison via percentile ranks, else synthetic sector averages."""
     if peer_data:
         scores = [
@@ -694,12 +693,12 @@ def _build_peer_comparison(
 
 
 def _build_key_positives_concerns(
-    dimension_scores: Dict[str, float],
-    fin: Dict[str, Any],
-    red_flags: List[str],
-) -> Tuple[List[str], List[str]]:
-    positives: List[str] = []
-    concerns: List[str] = []
+    dimension_scores: dict[str, float],
+    fin: dict[str, Any],
+    red_flags: list[str],
+) -> tuple[list[str], list[str]]:
+    positives: list[str] = []
+    concerns: list[str] = []
 
     if dimension_scores.get("盈利能力", 0) >= 7.0:
         if fin.get("roe", 0) >= 0.15:
@@ -732,10 +731,10 @@ def _build_key_positives_concerns(
 
 
 def _score_all_dimensions(
-    fin: Dict[str, Any],
-    management_score: Optional[float],
-    moat_score: Optional[float],
-) -> Dict[str, float]:
+    fin: dict[str, Any],
+    management_score: float | None,
+    moat_score: float | None,
+) -> dict[str, float]:
     return {
         "盈利能力": _score_profitability(fin),
         "成长性": _score_growth(fin),
@@ -762,8 +761,8 @@ def _private_company_bridge(
     company_name: str,
     industry: str,
     estimated_revenue: float,
-    ps_multiple: Optional[float] = None,
-    comparables: Optional[List[dict]] = None,
+    ps_multiple: float | None = None,
+    comparables: list[dict] | None = None,
     liquidity_discount: float = 0.20,
     control_premium: float = 0.0,
 ) -> PrivateCompanyBridge:
@@ -856,14 +855,14 @@ class ValuationAnchorTool(BaseTool):
 
     def execute(
         self,
-        codes: List[str] = None,
-        methods: List[str] = None,
-        scenarios: Dict = None,
-        financials: Optional[Dict] = None,
-        peers: Optional[List[dict]] = None,
-        private_company: Optional[Dict] = None,
-        current_price: Optional[float] = None,
-        asof_date: Optional[str] = None,
+        codes: list[str] = None,
+        methods: list[str] = None,
+        scenarios: dict = None,
+        financials: dict | None = None,
+        peers: list[dict] | None = None,
+        private_company: dict | None = None,
+        current_price: float | None = None,
+        asof_date: str | None = None,
     ) -> Trader3Response:
         """
         估值锚定。
@@ -1062,7 +1061,7 @@ class ValuationAnchorTool(BaseTool):
         )
 
     @staticmethod
-    def _asof_valuation_input(code: str, asof_date: str) -> Optional[Dict]:
+    def _asof_valuation_input(code: str, asof_date: str) -> dict | None:
         """
         防前视：按公告日对齐的财务数据（announcement_calendar.financials_asof），
         派生 to_valuation_input 同构输出（每股/比率口径一致）。
@@ -1124,7 +1123,7 @@ class ValuationAnchorTool(BaseTool):
         return {k: v for k, v in result.items() if v is not None}
 
     @staticmethod
-    def _try_real_financials(code: str, asof_date: Optional[str] = None) -> Optional[Dict]:
+    def _try_real_financials(code: str, asof_date: str | None = None) -> dict | None:
         """
         M8: 尝试从 financials.db 读取真实财务数据。
 
@@ -1147,7 +1146,7 @@ class ValuationAnchorTool(BaseTool):
             return None
 
     def _private_company_response(
-        self, private_company: Dict, code: str
+        self, private_company: dict, code: str
     ) -> Trader3Response:
         """Handle the private company valuation bridge path."""
         kwargs = dict(private_company)
@@ -1209,12 +1208,12 @@ class FundamentalScorecardTool(BaseTool):
 
     def execute(
         self,
-        codes: List[str] = None,
+        codes: list[str] = None,
         template: str = "quality_growth",
-        financials: Optional[Dict] = None,
-        peers: Optional[List[dict]] = None,
-        management_score: Optional[float] = None,
-        moat_score: Optional[float] = None,
+        financials: dict | None = None,
+        peers: list[dict] | None = None,
+        management_score: float | None = None,
+        moat_score: float | None = None,
     ) -> Trader3Response:
         """
         基本面评分卡。

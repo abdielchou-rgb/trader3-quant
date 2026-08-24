@@ -12,14 +12,14 @@ dict / pandas.DataFrame / 序列。
 """
 from __future__ import annotations
 
-from typing import Any, Dict, Optional
+from typing import Any
 
 
 class BarAccessor:
     """单根 Bar 行情列访问器：字段别名 + 缺失兜底（None）"""
 
     # 统一字段 → 常见别名（QUANTAXIS / qlib / 东财 等）
-    ALIASES: Dict[str, tuple] = {
+    ALIASES: dict[str, tuple] = {
         "open": ("open", "o", "开盘", "open_price"),
         "high": ("high", "h", "最高", "high_price"),
         "low": ("low", "l", "最低", "low_price"),
@@ -53,7 +53,7 @@ class BarAccessor:
                 continue
         return None
 
-    def get(self, field: str) -> Optional[float]:
+    def get(self, field: str) -> float | None:
         val = self._raw(field)
         if val is None:
             return None
@@ -63,28 +63,28 @@ class BarAccessor:
             return None
         return f if f == f else None  # 过滤 NaN
 
-    def open(self) -> Optional[float]:
+    def open(self) -> float | None:
         return self.get("open")
 
-    def high(self) -> Optional[float]:
+    def high(self) -> float | None:
         return self.get("high")
 
-    def low(self) -> Optional[float]:
+    def low(self) -> float | None:
         return self.get("low")
 
-    def close(self) -> Optional[float]:
+    def close(self) -> float | None:
         return self.get("close")
 
-    def volume(self) -> Optional[float]:
+    def volume(self) -> float | None:
         return self.get("volume")
 
-    def amount(self) -> Optional[float]:
+    def amount(self) -> float | None:
         return self.get("amount")
 
-    def prev_close(self) -> Optional[float]:
+    def prev_close(self) -> float | None:
         return self.get("prev_close")
 
-    def __getitem__(self, field: str) -> Optional[float]:
+    def __getitem__(self, field: str) -> float | None:
         return self.get(field)
 
     def fields(self) -> list:
@@ -95,12 +95,12 @@ class BarAccessor:
         return {f: self.get(f) for f in self.fields()}
 
 
-def bar_close(bar: Any) -> Optional[float]:
+def bar_close(bar: Any) -> float | None:
     """快捷函数：取 bar 的收盘价（None 兜底）"""
     return BarAccessor(bar).close()
 
 
-def get_quote_snapshot(code: str) -> Dict[str, Any]:
+def get_quote_snapshot(code: str) -> dict[str, Any]:
     """统一行情快照访问口：name/price 等快照一律走这里（换数据源只改一处）。
 
     委托 market_data.get_quote（东财→腾讯→新浪 三通道兜底），

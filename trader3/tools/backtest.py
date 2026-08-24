@@ -16,20 +16,18 @@ import math
 import os
 from dataclasses import asdict
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 import numpy as np
 
 from trader3.base_tool import BaseTool, ChartSpec, Trader3Response
-from trader3.v2.costs import CommissionInfo, DEFAULT_COSTS, build_commission
 from trader3.models import (
     BacktestReport,
-    FactorConfig,
     PortfolioConstraints,
     StrategyConfig,
     WFAReport,
 )
-
+from trader3.v2.costs import DEFAULT_COSTS, CommissionInfo
 
 # ═══════════════════════════════════════════
 # Constants
@@ -75,7 +73,7 @@ _BENCHMARK_MAP = {
 }
 
 
-def normalize_benchmark(benchmark: str) -> Tuple[str, Optional[str]]:
+def normalize_benchmark(benchmark: str) -> tuple[str, str | None]:
     """
     归一化基准代码 → (qlib 目录代码, 显示名或 None)。
 
@@ -106,7 +104,7 @@ def _estimate_trading_days(start_date: str, end_date: str) -> int:
     return max(int(total_days * TRADING_DAYS_PER_YEAR / 365), 20)
 
 
-def _factor_count(strategy_config: Optional[StrategyConfig]) -> int:
+def _factor_count(strategy_config: StrategyConfig | None) -> int:
     """提取因子数量"""
     if strategy_config and strategy_config.factors:
         return len(strategy_config.factors)
@@ -114,8 +112,8 @@ def _factor_count(strategy_config: Optional[StrategyConfig]) -> int:
 
 
 def _parse_constraints(
-    constraints: Optional[PortfolioConstraints], N: int
-) -> Dict[str, Any]:
+    constraints: PortfolioConstraints | None, N: int
+) -> dict[str, Any]:
     """解析组合约束"""
     if constraints is None:
         return {"n_hold": max(N // 5, 10), "max_single_w": 0.05, "long_only": True}
@@ -130,7 +128,7 @@ def _parse_constraints(
 
 def _generate_market_data(
     rng: np.random.Generator, T: int, N: int, n_factors: int
-) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """
     生成合成市场数据。
 
@@ -268,7 +266,7 @@ def _apply_execution_constraints(
     day_returns: np.ndarray,
     limit_ratios: np.ndarray,
     cash_weight: float,
-) -> Tuple[np.ndarray, float, int, int]:
+) -> tuple[np.ndarray, float, int, int]:
     """
     执行日撮合：按 A股涨跌停约束过滤调仓订单。
 
@@ -332,9 +330,9 @@ def _apply_execution_constraints(
 
 def _format_limit_caveats(
     limit_up_blocked: int, limit_down_blocked: int, final_cash_weight: float
-) -> List[str]:
+) -> list[str]:
     """涨跌停拦截统计 → 报告 caveats 行（无拦截且现金比例 ≤1% 时返回空）。"""
-    caveats: List[str] = []
+    caveats: list[str] = []
     if limit_up_blocked or limit_down_blocked:
         caveats.append(
             f"涨跌停约束: {limit_up_blocked} 笔买入因涨停无法成交、"
@@ -355,10 +353,10 @@ def _run_portfolio_simulation(
     n_hold: int,
     max_single_w: float,
     long_only: bool,
-    commission: Optional[CommissionInfo] = None,
-    codes: Optional[List[str]] = None,
-    stats: Optional[Dict[str, Any]] = None,
-) -> Tuple[np.ndarray, np.ndarray, float, int]:
+    commission: CommissionInfo | None = None,
+    codes: list[str] | None = None,
+    stats: dict[str, Any] | None = None,
+) -> tuple[np.ndarray, np.ndarray, float, int]:
     """
     月频调仓等权组合模拟。
 
@@ -452,11 +450,11 @@ def _run_portfolio_simulation(
 def _classify_period_returns(
     port_returns: np.ndarray,
     benchmark_prices: np.ndarray,
-) -> Dict[str, float]:
+) -> dict[str, float]:
     """按基准趋势分类的区间年化收益"""
     T = len(port_returns)
     ma_short, ma_long = 20, 60
-    regime_rets: Dict[str, list] = {"trending_up": [], "ranging": [], "bearish": []}
+    regime_rets: dict[str, list] = {"trending_up": [], "ranging": [], "bearish": []}
 
     for t in range(max(ma_long, 5), T):
         short_ma = np.mean(benchmark_prices[max(0, t - ma_short) : t])
@@ -470,7 +468,7 @@ def _classify_period_returns(
             regime = "ranging"
         regime_rets[regime].append(port_returns[t])
 
-    result: Dict[str, float] = {}
+    result: dict[str, float] = {}
     for regime, rets in regime_rets.items():
         result[regime] = (
             float(np.mean(rets) * TRADING_DAYS_PER_YEAR) if len(rets) >= 5 else 0.0
@@ -557,7 +555,7 @@ def _compute_metrics(
 # ═══════════════════════════════════════════
 
 
-def get_financials_asof(code: str, asof_date: str) -> Optional[dict]:
+def get_financials_asof(code: str, asof_date: str) -> dict | None:
     """
     防前视财务查询辅助：按公告日对齐返回 code 在 asof_date 当日可见的最新一期财务快照。
     供回测信号因子（估值锚、财务分位等）在历史时点安全引用财务数据，
@@ -612,8 +610,8 @@ def _prepare_expr(expr: str) -> Any:
     _SignalExprError — 语法非法（含原因）。
     """
     try:
-        from evolve.core.parser import parse_expr
         from evolve.core.gp import normalize
+        from evolve.core.parser import parse_expr
 
         node = parse_expr(str(expr))
         return normalize(node)
@@ -637,10 +635,10 @@ def _collect_expr_fields(node: Any) -> set:
 
 def _load_expression_panels(
     dp: Any,
-    codes_list: List[str],
-    time_axis: List[str],
+    codes_list: list[str],
+    time_axis: list[str],
     fields: set,
-) -> Dict[str, np.ndarray]:
+) -> dict[str, np.ndarray]:
     """
     按 codes_list × time_axis 对齐加载表达式所需字段面板 {field: (T,M)}。
 
@@ -649,7 +647,7 @@ def _load_expression_panels(
     """
     date_index = {d: i for i, d in enumerate(time_axis)}
     T, M = len(time_axis), len(codes_list)
-    panels: Dict[str, np.ndarray] = {}
+    panels: dict[str, np.ndarray] = {}
     for fld in sorted(fields):
         mat = np.full((T, M), np.nan, dtype=np.float64)
         loaded_any = False
@@ -670,7 +668,7 @@ def _load_expression_panels(
 
 def _expr_scores(
     node: Any,
-    panels: Dict[str, np.ndarray],
+    panels: dict[str, np.ndarray],
     valid_flags: np.ndarray,
 ) -> np.ndarray:
     """
@@ -728,7 +726,7 @@ def _load_expr_from_selected(rank: int) -> str:
     if not os.path.exists(path):
         raise FileNotFoundError(f"未找到 selected.json: {path}")
     try:
-        with open(path, "r", encoding="utf-8") as f:
+        with open(path, encoding="utf-8") as f:
             entries = json.load(f)
     except Exception as e:
         raise ValueError(f"selected.json 解析失败 ({path}): {e}") from e
@@ -745,8 +743,8 @@ def _load_expr_from_selected(rank: int) -> str:
     return expr
 
 
-def _build_aligned_panel(dp: Any, codes: List[str], start_date: str, end_date: str) -> Tuple[
-    List[str], List[str], np.ndarray, np.ndarray, np.ndarray, int
+def _build_aligned_panel(dp: Any, codes: list[str], start_date: str, end_date: str) -> tuple[
+    list[str], list[str], np.ndarray, np.ndarray, np.ndarray, int
 ]:
     """
     读取并按交易日历对齐面板（逐股容错：契约校验失败的股票跳过）。
@@ -763,8 +761,8 @@ def _build_aligned_panel(dp: Any, codes: List[str], start_date: str, end_date: s
     ------
     RuntimeError — 可用股票 <10 或区间交易日 <30。
     """
-    stock_closes: Dict[str, np.ndarray] = {}
-    stock_dates: Dict[str, List[str]] = {}
+    stock_closes: dict[str, np.ndarray] = {}
+    stock_dates: dict[str, list[str]] = {}
     n_skipped = 0
     for code in codes:
         try:
@@ -823,10 +821,10 @@ def _run_momentum_backtest(
     *,
     n_hold: int,
     max_single_w: float,
-    commission: Optional[CommissionInfo] = None,
-    codes: Optional[List[str]] = None,
-    score_matrix: Optional[np.ndarray] = None,
-) -> Tuple[np.ndarray, np.ndarray, float, int, Dict[str, Any]]:
+    commission: CommissionInfo | None = None,
+    codes: list[str] | None = None,
+    score_matrix: np.ndarray | None = None,
+) -> tuple[np.ndarray, np.ndarray, float, int, dict[str, Any]]:
     """
     真实面板动量组合回测（月频调仓；与合成引擎共用执行语义）：
 
@@ -901,7 +899,7 @@ def _run_momentum_backtest(
         if port_return > 0:
             positive_days += 1
 
-    stats: Dict[str, Any] = {
+    stats: dict[str, Any] = {
         "limit_up_blocked": limit_up_blocked,
         "limit_down_blocked": limit_down_blocked,
         "final_cash_weight": float(cash_weight),
@@ -916,7 +914,7 @@ def _open_qlib_dp() -> Any:
     return QlibDataProvider()
 
 
-def _load_wfa_panel(dp: Any) -> Tuple[List[str], np.ndarray, np.ndarray, np.ndarray]:
+def _load_wfa_panel(dp: Any) -> tuple[list[str], np.ndarray, np.ndarray, np.ndarray]:
     """
     WFA 全历史面板：成分池取 csi300（按日历起点 asof 过滤，防幸存者偏差），
     缺失时回退 all；超上限按固定种子确定性抽样。
@@ -930,7 +928,7 @@ def _load_wfa_panel(dp: Any) -> Tuple[List[str], np.ndarray, np.ndarray, np.ndar
         raise RuntimeError("qlib 日历为空")
     start_date, end_date = cal[0], cal[-1]
 
-    codes: List[str] = []
+    codes: list[str] = []
     for universe in ("csi300", "all"):
         try:
             codes = dp.instruments(universe, asof_date=start_date) or []
@@ -958,10 +956,10 @@ def _run_wfa_rolling(
     train_window: int,
     test_window: int,
     step: int,
-    codes: Optional[List[str]] = None,
-    commission: Optional[CommissionInfo] = None,
-) -> Tuple[List[dict], List[float], List[float], List[float], List[float],
-           List[np.ndarray], np.ndarray]:
+    codes: list[str] | None = None,
+    commission: CommissionInfo | None = None,
+) -> tuple[list[dict], list[float], list[float], list[float], list[float],
+           list[np.ndarray], np.ndarray]:
     """
     滚动 IS/OOS（真实/合成面板共用）。
 
@@ -999,13 +997,13 @@ def _run_wfa_rolling(
     else:
         limit_ratios = np.full(N, DEFAULT_PRICE_LIMIT, dtype=np.float64)
 
-    windows: List[dict] = []
-    is_ann_list: List[float] = []
-    oos_ann_list: List[float] = []
-    is_sr_list: List[float] = []
-    oos_sr_list: List[float] = []
-    param_weights: List[np.ndarray] = []
-    oos_chunks: List[np.ndarray] = []
+    windows: list[dict] = []
+    is_ann_list: list[float] = []
+    oos_ann_list: list[float] = []
+    is_sr_list: list[float] = []
+    oos_sr_list: list[float] = []
+    param_weights: list[np.ndarray] = []
+    oos_chunks: list[np.ndarray] = []
 
     w = 0
     s = 0
@@ -1104,13 +1102,13 @@ class RunBacktestTool(BaseTool):
 
     def _fingerprint(
         self,
-        strategy_config: Optional[StrategyConfig],
-        universe: Optional[List[str]],
+        strategy_config: StrategyConfig | None,
+        universe: list[str] | None,
         start_date: str,
         end_date: str,
-        constraints: Optional[PortfolioConstraints],
+        constraints: PortfolioConstraints | None,
         benchmark: str,
-        commission: Optional[CommissionInfo] = None,
+        commission: CommissionInfo | None = None,
         *,
         engine_tag: str = "real",
         data_end: str = "",
@@ -1144,7 +1142,7 @@ class RunBacktestTool(BaseTool):
         raw = json.dumps(data, sort_keys=True, ensure_ascii=False)
         return hashlib.sha256(raw.encode()).hexdigest()
 
-    def _probe_engine(self) -> Tuple[str, str]:
+    def _probe_engine(self) -> tuple[str, str]:
         """探测可用引擎与数据末端（不执行回测）：('real'|'synthetic', data_end)"""
         try:
             from trader3.data_provider import find_qlib_dir
@@ -1152,7 +1150,7 @@ class RunBacktestTool(BaseTool):
             qdir = find_qlib_dir()
             if qdir:
                 cal_path = os.path.join(qdir, "calendars", "day.txt")
-                with open(cal_path, "r") as f:
+                with open(cal_path) as f:
                     lines = [ln.strip() for ln in f if ln.strip()]
                 if lines:
                     return "real", lines[-1]
@@ -1163,12 +1161,12 @@ class RunBacktestTool(BaseTool):
     def _cache_path(self, fp: str) -> str:
         return os.path.join(self._cache_dir, f"{fp}.json")
 
-    def _load_cache(self, fp: str) -> Optional[Trader3Response]:
+    def _load_cache(self, fp: str) -> Trader3Response | None:
         path = self._cache_path(fp)
         if not os.path.exists(path):
             return None
         try:
-            with open(path, "r", encoding="utf-8") as f:
+            with open(path, encoding="utf-8") as f:
                 saved = json.load(f)
             # 指纹完整匹配校验：存储指纹不一致（旧格式/串参数）一律视为未命中
             if saved.pop("_fingerprint", None) != fp:
@@ -1208,13 +1206,13 @@ class RunBacktestTool(BaseTool):
 
     def execute(
         self,
-        strategy_config: Optional[StrategyConfig] = None,
-        universe: Optional[List[str]] = None,
+        strategy_config: StrategyConfig | None = None,
+        universe: list[str] | None = None,
         start_date: str = "2020-01-01",
         end_date: str = "2025-12-31",
-        constraints: Optional[PortfolioConstraints] = None,
+        constraints: PortfolioConstraints | None = None,
         benchmark: str = "000300.SH",
-        commission: Optional[CommissionInfo] = None,
+        commission: CommissionInfo | None = None,
         signal_expr: str = "",
         factor_from_selected: int = 0,
     ) -> Trader3Response:
@@ -1295,13 +1293,13 @@ class RunBacktestTool(BaseTool):
 
     def _real_data_backtest(
         self,
-        strategy_config: Optional[StrategyConfig],
-        universe: Optional[List[str]],
+        strategy_config: StrategyConfig | None,
+        universe: list[str] | None,
         start_date: str,
         end_date: str,
-        constraints: Optional[PortfolioConstraints],
+        constraints: PortfolioConstraints | None,
         benchmark: str,
-        commission: Optional[CommissionInfo] = None,
+        commission: CommissionInfo | None = None,
         signal_expr: str = "",
     ) -> Trader3Response:
         """
@@ -1354,7 +1352,7 @@ class RunBacktestTool(BaseTool):
         bench_returns = np.zeros(T, dtype=np.float64)
         if len(bench_close) > 1:
             # 对齐基准到时间轴
-            bench_map = {d: close for d, close in zip(bench_dates, bench_close)}
+            bench_map = {d: close for d, close in zip(bench_dates, bench_close, strict=False)}
             bench_series = np.zeros(T, dtype=np.float64)
             for i, d in enumerate(time_axis):
                 if d in bench_map and bench_map[d] > 0:
@@ -1376,7 +1374,7 @@ class RunBacktestTool(BaseTool):
             expr_fields = _collect_expr_fields(node)
             close_panel = np.where(close_matrix > 0, close_matrix, np.nan)
             extra_fields = {f for f in expr_fields if f != "close"}
-            expr_panels: Dict[str, np.ndarray] = {"close": close_panel}
+            expr_panels: dict[str, np.ndarray] = {"close": close_panel}
             if extra_fields:
                 expr_panels.update(
                     _load_expression_panels(dp, codes_list, time_axis, extra_fields)
@@ -1469,11 +1467,11 @@ class RunBacktestTool(BaseTool):
 
     def _qlib_backtest(
         self,
-        strategy_config: Optional[StrategyConfig],
-        universe: Optional[List[str]],
+        strategy_config: StrategyConfig | None,
+        universe: list[str] | None,
         start_date: str,
         end_date: str,
-        constraints: Optional[PortfolioConstraints],
+        constraints: PortfolioConstraints | None,
         benchmark: str,
     ) -> Trader3Response:
         """Qlib 回测（完整 qlib 安装时使用）"""
@@ -1483,13 +1481,13 @@ class RunBacktestTool(BaseTool):
 
     def _vectorized_backtest(
         self,
-        strategy_config: Optional[StrategyConfig],
-        universe: Optional[List[str]],
+        strategy_config: StrategyConfig | None,
+        universe: list[str] | None,
         start_date: str,
         end_date: str,
-        constraints: Optional[PortfolioConstraints],
+        constraints: PortfolioConstraints | None,
         benchmark: str,
-        commission: Optional[CommissionInfo] = None,
+        commission: CommissionInfo | None = None,
     ) -> Trader3Response:
         """
         向量化回测（无 Qlib 时使用）。
@@ -1514,7 +1512,7 @@ class RunBacktestTool(BaseTool):
         )
 
         # ── 组合模拟 ──
-        sim_stats: Dict[str, Any] = {}
+        sim_stats: dict[str, Any] = {}
         equity, port_returns, turnover_total, positive_days = _run_portfolio_simulation(
             stock_returns, factor_scores, N, n_hold, max_single_w, long_only,
             commission, stats=sim_stats,
@@ -1594,10 +1592,10 @@ class WalkForwardAnalysisTool(BaseTool):
 
     def execute(
         self,
-        strategy_config: Optional[StrategyConfig] = None,
+        strategy_config: StrategyConfig | None = None,
         train_window: int = 252,
         test_window: int = 63,
-        step: Optional[int] = None,
+        step: int | None = None,
     ) -> Trader3Response:
         """
         滚动 WFA（真实 qlib 数据优先）。
@@ -1614,13 +1612,13 @@ class WalkForwardAnalysisTool(BaseTool):
         eff_step = int(step) if step is not None else int(test_window)
 
         panel = None
-        panel_err: Optional[Exception] = None
+        panel_err: Exception | None = None
         try:
             panel = _load_wfa_panel(_open_qlib_dp())
         except Exception as e:  # 数据缺失/损坏 → 合成回退
             panel_err = e
 
-        exec_codes: Optional[List[str]] = None
+        exec_codes: list[str] | None = None
         if panel is not None:
             codes_list, close_matrix, returns_matrix, _valid_flags = panel
             stock_returns = returns_matrix

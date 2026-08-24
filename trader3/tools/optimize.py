@@ -12,14 +12,12 @@ from __future__ import annotations
 
 import math
 import warnings
-from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 from scipy.optimize import minimize
 
 from trader3.base_tool import BaseTool, ChartSpec, Trader3Response
 from trader3.models import OptimizationResult, PortfolioConstraints
-
 
 # ═══════════════════════════════════════════
 # Constants
@@ -40,9 +38,9 @@ SLSQP_OPTIONS = {"maxiter": 2000, "ftol": 1e-12, "disp": False}
 # ═══════════════════════════════════════════
 
 def _signals_to_mu_sigma(
-    signals: Dict[str, float],
+    signals: dict[str, float],
     rng_seed: int = 42,
-) -> Tuple[np.ndarray, np.ndarray, List[str]]:
+) -> tuple[np.ndarray, np.ndarray, list[str]]:
     """
     将信号分数转换为期望收益和协方差矩阵。
 
@@ -104,7 +102,7 @@ def _signals_to_mu_sigma(
 
 
 def _parse_constraints(
-    constraints: Optional[PortfolioConstraints],
+    constraints: PortfolioConstraints | None,
     N: int,
 ) -> dict:
     """
@@ -144,9 +142,9 @@ def _parse_constraints(
     }
 
 
-def _verify_constraints(weights: np.ndarray, cons: dict) -> List[str]:
+def _verify_constraints(weights: np.ndarray, cons: dict) -> list[str]:
     """对最终权重向量做实测复检，返回结构性违规描述（不信任求解器自报）。"""
-    violations: List[str] = []
+    violations: list[str] = []
     cap = cons["max_single"]
     if len(weights) and float(np.max(weights)) > cap + 1e-6:
         violations.append(
@@ -166,9 +164,9 @@ def _verify_constraints(weights: np.ndarray, cons: dict) -> List[str]:
 
 def _risk_budget_optimize(
     Sigma: np.ndarray,
-    tickers: List[str],
+    tickers: list[str],
     constraints: dict,
-) -> Tuple[np.ndarray, bool, List[str]]:
+) -> tuple[np.ndarray, bool, list[str]]:
     """
     风险平价 / 最小方差优化。
 
@@ -217,10 +215,10 @@ def _risk_budget_optimize(
 def _mean_variance_optimize(
     mu: np.ndarray,
     Sigma: np.ndarray,
-    tickers: List[str],
+    tickers: list[str],
     constraints: dict,
     risk_aversion: float = DEFAULT_LAMBDA,
-) -> Tuple[np.ndarray, bool, List[str]]:
+) -> tuple[np.ndarray, bool, list[str]]:
     """
     均值-方差优化。
 
@@ -262,13 +260,13 @@ def _mean_variance_optimize(
 
 
 def _black_litterman_optimize(
-    signals: Dict[str, float],
+    signals: dict[str, float],
     Sigma: np.ndarray,
-    tickers: List[str],
+    tickers: list[str],
     constraints: dict,
     risk_aversion: float = DEFAULT_LAMBDA,
     tau: float = BL_TAU,
-) -> Tuple[np.ndarray, bool, List[str]]:
+) -> tuple[np.ndarray, bool, list[str]]:
     """
     简化版 Black-Litterman。
 
@@ -350,9 +348,9 @@ def _black_litterman_optimize(
 
 def _compute_factor_exposures(
     weights: np.ndarray,
-    tickers: List[str],
-    signals: Dict[str, float],
-) -> Dict[str, float]:
+    tickers: list[str],
+    signals: dict[str, float],
+) -> dict[str, float]:
     """
     估算组合因子暴露。
 
@@ -398,8 +396,8 @@ def _compute_factor_exposures(
 
 def _estimate_turnover_cost(
     weights: np.ndarray,
-    tickers: List[str],
-    current_weights: Optional[Dict[str, float]] = None,
+    tickers: list[str],
+    current_weights: dict[str, float] | None = None,
 ) -> float:
     """
     估算换手成本 (bp)。
@@ -433,10 +431,10 @@ class OptimizePortfolioTool(BaseTool):
 
     def execute(
         self,
-        signals: Dict[str, float] = None,
+        signals: dict[str, float] = None,
         method: str = "risk_budget",
         constraints: PortfolioConstraints = None,
-        risk_model: Dict = None,
+        risk_model: dict = None,
     ) -> Trader3Response:
         """执行组合优化 (M2: 真实优化引擎)"""
         if not signals:
@@ -498,7 +496,7 @@ class OptimizePortfolioTool(BaseTool):
         turnover_cost_bp = _estimate_turnover_cost(weights, tickers)
 
         target_weights_all = {
-            t: round(float(w), 6) for t, w in zip(tickers, weights)
+            t: round(float(w), 6) for t, w in zip(tickers, weights, strict=False)
         }
         target_weights_sorted = dict(
             sorted(target_weights_all.items(), key=lambda x: -x[1])[: min(N, 20)]
@@ -583,9 +581,9 @@ class RegimeAwareAllocationTool(BaseTool):
 
     def execute(
         self,
-        signals: Dict[str, float] = None,
-        regime_probs: Dict[str, float] = None,
-        regime_weights: Dict[str, Dict] = None,
+        signals: dict[str, float] = None,
+        regime_probs: dict[str, float] = None,
+        regime_weights: dict[str, dict] = None,
         constraints: PortfolioConstraints = None,
     ) -> Trader3Response:
         """
@@ -612,7 +610,7 @@ class RegimeAwareAllocationTool(BaseTool):
         tickers = list(signals.keys())
 
         # ── 计算概率加权综合分配 ──
-        composite_scores: Dict[str, float] = {t: 0.0 for t in tickers}
+        composite_scores: dict[str, float] = {t: 0.0 for t in tickers}
         total_prob = sum(regime_probs.values())
 
         if total_prob <= 0:
@@ -676,7 +674,7 @@ class RegimeAwareAllocationTool(BaseTool):
         suggested_position = max(0.3, min(1.0, 1.0 - risk_prob * 1.5))
 
         target_weights_all = {
-            t: round(float(w), 6) for t, w in zip(tickers, weights)
+            t: round(float(w), 6) for t, w in zip(tickers, weights, strict=False)
         }
         target_weights_sorted = dict(
             sorted(target_weights_all.items(), key=lambda x: -x[1])[

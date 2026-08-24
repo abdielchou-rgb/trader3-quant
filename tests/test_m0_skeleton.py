@@ -1,11 +1,6 @@
 """3号交易员 — M0 骨架验证测试"""
 
 from trader3 import Trader3, Trader3Response
-from trader3.models import (
-    BacktestReport, OptimizationResult, TCAEstimate,
-    SignalValidationReport, RegimeDiagnosis, ValuationReport,
-    ScorecardReport, WFAReport, PortfolioConstraints, StrategyConfig,
-)
 
 
 class TestM0Skeleton:
@@ -31,9 +26,8 @@ class TestM0Skeleton:
             "valuation_anchor", "fundamental_scorecard",
         }
         missing = expected - tools
-        extra = tools - expected
         assert not missing, f"缺少 Tool: {missing}"
-        print(f"  ✅ 10 个 Tool 全部注册")
+        print("  ✅ 10 个 Tool 全部注册")
 
     def test_run_backtest(self):
         """验证回测接口"""
@@ -130,14 +124,14 @@ class TestM0Skeleton:
             assert result.metadata.get("request_id"), f"metadata missing request_id: {method.__name__}"
             assert result.metadata.get("elapsed_seconds", 0) > 0, f"elapsed=0: {method.__name__}"
 
-        print(f"  ✅ 全部 10 个 Tool 返回格式一致 (含 request_id/elapsed/tool)")
+        print("  ✅ 全部 10 个 Tool 返回格式一致 (含 request_id/elapsed/tool)")
 
     def test_gates_default_on(self):
         """验证门禁默认启用 (M6: 完整 IronGate)"""
         assert self.t3.gates.enabled
         summary = self.t3.gates.summary()
         assert summary["enabled"] is True
-        print(f"  ✅ 门禁默认启用 (M6 完整 IronGate 模式)")
+        print("  ✅ 门禁默认启用 (M6 完整 IronGate 模式)")
 
     def test_gates_can_disable(self):
         """验证门禁可显式关闭 (M0 兼容)"""
@@ -146,7 +140,7 @@ class TestM0Skeleton:
         assert not t3_disabled.gates.enabled
         summary = t3_disabled.gates.summary()
         assert summary["enabled"] is False
-        print(f"  ✅ 门禁可显式关闭 (M0 存根模式)")
+        print("  ✅ 门禁可显式关闭 (M0 存根模式)")
 
     def test_shared_state(self):
         """验证共享状态可用"""
@@ -157,7 +151,7 @@ class TestM0Skeleton:
         state.set_data_version({"financials": "v20260809", "market": "v20260810"})
         version = state.get_data_version()
         assert version["versions"]["financials"] == "v20260809"
-        print(f"  ✅ shared_state: 读写正常")
+        print("  ✅ shared_state: 读写正常")
 
     def test_config_manager(self):
         """验证配置管理"""

@@ -19,10 +19,10 @@ from __future__ import annotations
 
 import os
 import time
-
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, field, asdict
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from collections.abc import Callable
+from dataclasses import asdict, dataclass, field
+from typing import Any
 
 from trader3.models import (
     BacktestReport,
@@ -30,11 +30,7 @@ from trader3.models import (
     RegimeDiagnosis,
     SignalValidationReport,
     TCAEstimate,
-    ValuationReport,
-    ScorecardReport,
-    WFAReport,
 )
-
 
 # ── 门禁阈值常量 ──
 BACKTEST_T_STAT_MIN = 2.0            # t 统计量门槛
@@ -64,7 +60,7 @@ class GateResult:
     check_name: str = ""
     score: float = 0.0         # 0.0~1.0
     message: str = ""          # 通过/失败原因
-    details: Dict[str, Any] = field(default_factory=dict)
+    details: dict[str, Any] = field(default_factory=dict)
 
     def __bool__(self) -> bool:
         return self.passed
@@ -99,7 +95,7 @@ def _safe_get(obj: Any, key: str, default: Any = None) -> Any:
     return default
 
 
-def _to_dict(obj: Any) -> Dict[str, Any]:
+def _to_dict(obj: Any) -> dict[str, Any]:
     """dataclass / dict → dict；其他对象尝试 asdict，失败返回空。"""
     if obj is None:
         return {}
@@ -116,9 +112,9 @@ def _to_dict(obj: Any) -> Dict[str, Any]:
 # 独立抽检审计逻辑（Gate 8）
 # ═══════════════════════════════════════════
 
-def _extract_numeric_fields(obj: Any, max_fields: int = 30) -> List[Tuple[str, float]]:
+def _extract_numeric_fields(obj: Any, max_fields: int = 30) -> list[tuple[str, float]]:
     """从对象中提取数值字段（供抽检使用）。"""
-    fields: List[Tuple[str, float]] = []
+    fields: list[tuple[str, float]] = []
     d = _to_dict(obj)
     for k, v in d.items():
         if isinstance(v, (int, float)) and not isinstance(v, bool):
@@ -133,8 +129,8 @@ def _extract_numeric_fields(obj: Any, max_fields: int = 30) -> List[Tuple[str, f
 
 
 def _find_consistency_relations(
-    d: Dict[str, Any]
-) -> List[Tuple[str, float, str, str]]:
+    d: dict[str, Any]
+) -> list[tuple[str, float, str, str]]:
     """
     从数据字典中寻找内部一致性关系: total == a + b + c + ...
 
@@ -142,7 +138,7 @@ def _find_consistency_relations(
     避免把 CNY 金额与 bp 分量混算。
     无总和字段时退化为逐项包含检查（total 存在且 ≥ 最大分项）。
     """
-    relations: List[Tuple[str, float, str, str]] = []
+    relations: list[tuple[str, float, str, str]] = []
     total_keys = [k for k in d.keys() if "total" in k.lower()]
     component_keys = [
         "commission_bp", "stamp_tax_bp", "impact_bp", "timing_risk_bp",
@@ -207,7 +203,7 @@ def run_sample_audit(data: Any, sample_ratio: float = AUDIT_SAMPLE_RATIO) -> Gat
     # 3) 内部一致性交叉验证
     relations = _find_consistency_relations(d)
     checked_count = 0
-    mismatches: List[Dict[str, Any]] = []
+    mismatches: list[dict[str, Any]] = []
 
     for tk, total, op, note in relations:
         if op == "approx_eq":
@@ -274,7 +270,7 @@ class Trader3Gates:
     def __init__(self, enabled: bool = True, state: Any = None):
         self.enabled = enabled
         self.state = state
-        self._history: List[GateResult] = []
+        self._history: list[GateResult] = []
 
     # ── Gate 1: 回测统计显著性 ──
 
@@ -355,7 +351,7 @@ class Trader3Gates:
         ]
 
         # 独立复检：用产出里的 target_weights 与上限字段重算
-        independent: List[str] = []
+        independent: list[str] = []
         tw = _safe_get(result, "target_weights", None)
         cap = float(_safe_get(result, "max_single_weight_cap", 0) or 0)
         if isinstance(tw, dict) and tw and cap > 0:
@@ -450,7 +446,7 @@ class Trader3Gates:
     # ── Gate 6: 数据版本新鲜度 (新增) ──
 
     @staticmethod
-    def _probe_source_mtime() -> Optional[Dict[str, Any]]:
+    def _probe_source_mtime() -> dict[str, Any] | None:
         """
         data_version.json 缺失时的回退：用 qlib 数据集日历文件 mtime 作为新鲜度依据。
         静态数据集不应按墙钟时间判陈旧，而应看数据源本身是否被写入过。
@@ -565,8 +561,7 @@ class Trader3Gates:
         synthetic = any(m in caveat_text for m in synthetic_markers)
 
         # 2) 逐字段可信度: 无证据 → "unverified"
-        evidence_keywords = ("source", "verified", "evidence", "real")
-        unverified_fields: List[str] = []
+        unverified_fields: list[str] = []
         for k, v in report_dict.items():
             if isinstance(v, (str, int, float)) and not isinstance(v, bool):
                 if k in ("key_assumptions", "methods"):
@@ -582,11 +577,6 @@ class Trader3Gates:
             has_source = any(ev in caveat_text for ev in ("来源", "数据源", "source", "Source"))
             if has_source:
                 credibility = "medium"
-
-        checks = {
-            "synthetic_data_tagged": synthetic or not _has_explicit_synthetic_flag(report),
-            "unverified_fields_defaulted": len(unverified_fields) > 0,
-        }
 
         # 门禁语义: 合成/模板数据 → 必须明确标注，且可信度降级；标注存在则通过。
         # 牙齿：产出内部显式声明 used_synthetic=True 但 caveats 未标注 → 拦截（铁律#1）。
@@ -618,7 +608,7 @@ class Trader3Gates:
 
     # ── 批量运行 ──
 
-    def run_all(self, type: str = "", data: Any = None) -> List[GateResult]:
+    def run_all(self, type: str = "", data: Any = None) -> list[GateResult]:
         """运行所有相关门禁（按产出类型 + 产出实例路由）。"""
         results = []
         for name, check in self._get_checks(type, data):
@@ -633,7 +623,7 @@ class Trader3Gates:
             self._history.append(result)
         return results
 
-    def summary(self) -> Dict[str, Any]:
+    def summary(self) -> dict[str, Any]:
         """门禁摘要"""
         total = len(self._history)
         passed = sum(1 for r in self._history if r.passed)
@@ -662,7 +652,7 @@ class Trader3Gates:
         return result
 
     def _result(self, passed: bool, name: str, score: float = 0.0,
-                details: Optional[dict] = None, message: str = "") -> GateResult:
+                details: dict | None = None, message: str = "") -> GateResult:
         if not message:
             message = "通过" if passed else f"未通过: {name}"
         result = GateResult(
@@ -672,7 +662,7 @@ class Trader3Gates:
         self._history.append(result)
         return result
 
-    def _get_checks(self, output_type: str = "", data: Any = None) -> List[Tuple[str, Callable]]:
+    def _get_checks(self, output_type: str = "", data: Any = None) -> list[tuple[str, Callable]]:
         """
         产出 → 门禁检查列表。
 
@@ -695,7 +685,7 @@ class Trader3Gates:
         checks = list(mapping.get(output_type, []))
 
         # 精确类型路由（signal 类别下区分两种产出；回测显著性仅对 BacktestReport）
-        type_specific: List[Tuple[str, Callable]] = []
+        type_specific: list[tuple[str, Callable]] = []
         if isinstance(data, SignalValidationReport):
             type_specific.append(("因子有效性门槛", self.check_factor_hurdle))
         elif isinstance(data, RegimeDiagnosis):

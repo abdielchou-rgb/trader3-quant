@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 自定义因子表达式接入回测（signal_expr / factor_from_selected）+ WFA 成本与涨跌停修复验证：
 
@@ -8,10 +7,10 @@
 4. test_wfa_includes_costs                — WFA 测试段首日扣换手成本：含成本 OOS < 零成本对照；caveat 明示
 5. test_cache_distinguishes_signal_expr   — 缓存指纹含 signal_expr 的 sha1，不同表达式互不串缓存
 """
-import sys
-import os
-import json
 import datetime as dt
+import json
+import os
+import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -191,7 +190,7 @@ def test_wfa_includes_costs():
     """已知换手场景（一窗满仓建仓、无涨跌停拦截）：
     - 首日成本差 = 换手 1.0 × DEFAULT_COSTS 总费率（17bp），逐项可对账；
     - 含成本的 OOS 年化严格小于零成本对照。"""
-    from trader3.tools.backtest import _run_wfa_rolling, _annualized_return
+    from trader3.tools.backtest import _annualized_return, _run_wfa_rolling
     from trader3.v2.costs import DEFAULT_COSTS
 
     rng = np.random.default_rng(7)

@@ -17,7 +17,6 @@ from __future__ import annotations
 import logging
 import os
 from datetime import datetime
-from typing import List, Optional
 
 os.environ.setdefault("AKSHARE_NO_PROXY", "1")
 
@@ -32,7 +31,7 @@ class FundingMarginSource:
     source_name = "margin"
     availability = "sandbox"
 
-    def fetch(self, code: str = "600519", limit: int = 5) -> List[SourceItem]:
+    def fetch(self, code: str = "600519", limit: int = 5) -> list[SourceItem]:
         try:
             import akshare as ak
             df = ak.stock_margin_detail_sse(date=datetime.now().strftime("%Y%m%d"))
@@ -47,9 +46,8 @@ class FundingMarginSource:
             sub = df[df["标的证券代码"].astype(str).str.zfill(6) == code_clean]
             if sub.empty:
                 return []
-            row = sub.iloc[-1]
             items = []
-            for i, (_, r) in enumerate(sub.tail(limit).iterrows()):
+            for _i, (_, r) in enumerate(sub.tail(limit).iterrows()):
                 title = f"融资融券 {code_clean}: 融资余额 {r.get('融资余额', 0)}"
                 items.append(SourceItem(
                     title=title, content=f"融资买入 {r.get('融资买入额',0)} 偿还 {r.get('融资偿还额',0)}",
@@ -68,7 +66,7 @@ class ShareholderCountSource:
     source_name = "shareholder_count"
     availability = "sandbox"
 
-    def fetch(self, code: str = "600519", limit: int = 5) -> List[SourceItem]:
+    def fetch(self, code: str = "600519", limit: int = 5) -> list[SourceItem]:
         try:
             import akshare as ak
             symbol = code if code.startswith(("sh", "sz", "bj")) else code.strip()
@@ -99,7 +97,7 @@ class NorthboundSource:
     source_name = "northbound"
     availability = "sandbox"
 
-    def fetch(self, code: str = "600519", limit: int = 5) -> List[SourceItem]:
+    def fetch(self, code: str = "600519", limit: int = 5) -> list[SourceItem]:
         try:
             import akshare as ak
             df = ak.stock_hsgt_individual_em(symbol=code)
@@ -124,5 +122,5 @@ class NorthboundSource:
 ALL_EXTRA = [FundingMarginSource(), ShareholderCountSource(), NorthboundSource()]
 
 
-def extra_status() -> List[dict]:
+def extra_status() -> list[dict]:
     return [{"name": s.source_name, "availability": s.availability} for s in ALL_EXTRA]

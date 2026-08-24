@@ -19,8 +19,8 @@ import json
 import logging
 import os
 import tempfile
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional
 
 import akshare as ak
 import pandas as pd
@@ -46,7 +46,7 @@ def default_calendar_path() -> Path:
     return Path(__file__).resolve().parents[2] / "data" / "disclosure_calendar.json"
 
 
-def load_explicit_calendar(path: Optional[Path] = None) -> Dict[str, Dict[str, str]]:
+def load_explicit_calendar(path: Path | None = None) -> dict[str, dict[str, str]]:
     """读取显式公告日历 {code: {quarter: announce_date}}；缺失/损坏返回 {}"""
     p = Path(path) if path else default_calendar_path()
     try:
@@ -60,7 +60,7 @@ def load_explicit_calendar(path: Optional[Path] = None) -> Dict[str, Dict[str, s
         return {}
 
 
-def save_explicit_calendar(data: dict, path: Optional[Path] = None) -> Path:
+def save_explicit_calendar(data: dict, path: Path | None = None) -> Path:
     """原子写：临时文件 + os.replace"""
     p = Path(path) if path else default_calendar_path()
     p.parent.mkdir(parents=True, exist_ok=True)
@@ -85,7 +85,7 @@ def _norm_code(code) -> str:
     return c.zfill(6)[:6]
 
 
-def _pick_announce_date(row: dict) -> Optional[str]:
+def _pick_announce_date(row: dict) -> str | None:
     """按优先级取首个非空日期 → ISO 字符串"""
     for col in _DATE_COLS_PRIORITY:
         val = row.get(col)
@@ -103,7 +103,7 @@ def _pick_announce_date(row: dict) -> Optional[str]:
     return None
 
 
-def sync_disclosure_dates(quarter: str, codes: Optional[List[str]] = None) -> dict:
+def sync_disclosure_dates(quarter: str, codes: list[str] | None = None) -> dict:
     """拉取报告期 quarter 的预约披露表并写入显式公告日历。
 
     - 幂等：同 (code, quarter) 重写覆盖；合并保留其他报告期条目
@@ -117,7 +117,7 @@ def sync_disclosure_dates(quarter: str, codes: Optional[List[str]] = None) -> di
         return {"synced": 0, "quarter": quarter, "source": None,
                 "path": str(default_calendar_path())}
 
-    wanted: Optional[set] = None
+    wanted: set | None = None
     if codes:
         wanted = {_norm_code(c) for c in codes}
 
@@ -128,7 +128,7 @@ def sync_disclosure_dates(quarter: str, codes: Optional[List[str]] = None) -> di
         return {"synced": 0, "quarter": q, "source": None,
                 "path": str(default_calendar_path())}
 
-    updates: Dict[str, str] = {}
+    updates: dict[str, str] = {}
     skipped_no_date = 0
     for row in df.to_dict("records"):
         code = _norm_code(row.get("股票代码"))
@@ -156,7 +156,7 @@ def sync_disclosure_dates(quarter: str, codes: Optional[List[str]] = None) -> di
     }
 
 
-def main(argv: Optional[Iterable[str]] = None) -> int:
+def main(argv: Iterable[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="python -m trader3.v2.disclosure_sync",
         description="同步预约披露时间表到本地公告日历（防前视用）",

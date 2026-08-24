@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 公告日历自动化（disclosure_sync）零联网测试：
 
@@ -8,8 +7,8 @@
 4. 主源故障降级（synced=0 不抛出）
 5. codes 过滤生效
 """
-import sys
 import os
+import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 

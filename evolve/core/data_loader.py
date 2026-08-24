@@ -12,9 +12,7 @@
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 
@@ -25,7 +23,7 @@ def load_qlib_panel(
     start: str = "2020-01-01",
     end: str = "2024-12-31",
     data_dir: str = "",
-) -> Tuple[Dict[str, np.ndarray], np.ndarray]:
+) -> tuple[dict[str, np.ndarray], np.ndarray]:
     """
     从 qlib bin 加载股票面板。
 
@@ -97,7 +95,7 @@ def load_etf_panel(
     n_etfs: int = 30,
     start: str = "2020-01-01",
     end: str = "2024-12-31",
-) -> Tuple[Dict[str, np.ndarray], np.ndarray]:
+) -> tuple[dict[str, np.ndarray], np.ndarray]:
     """
     从 akshare 拉取的 ETF CSV 目录加载面板。
 

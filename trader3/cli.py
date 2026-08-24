@@ -6,7 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from typing import Any, Dict
+from typing import Any
 
 from trader3 import Trader3
 
@@ -122,8 +122,8 @@ def _output(result, verbose: bool = False):
               f"request_id={result.metadata.get('request_id')}")
 
 
-def _load_json(path: str) -> Dict[str, Any]:
-    with open(path, "r", encoding="utf-8") as f:
+def _load_json(path: str) -> dict[str, Any]:
+    with open(path, encoding="utf-8") as f:
         return json.load(f)
 
 
@@ -139,7 +139,7 @@ def _run_backtest(t3, args):
     _output(result, args.verbose)
 
 
-def _load_strategy_config(path: str) -> "StrategyConfig":
+def _load_strategy_config(path: str) -> StrategyConfig:  # noqa: F821 -- StrategyConfig 在函数内延迟导入，模块级无法解析
     """完整解析策略 YAML（metadata/universe/factors/constraints/risk_model/optimizer）"""
     from dataclasses import fields as dc_fields
 

@@ -15,13 +15,10 @@ from __future__ import annotations
 
 import json
 import logging
-import os
-import re
 import sqlite3
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Dict, List, Optional
 
 logger = logging.getLogger("trader3.v2.events")
 
@@ -71,7 +68,7 @@ class Event:
     catalyst_score: float = 0.0     # 0~1 催化强度（正为多，负为空）
     direction: str = "neutral"      # positive / negative / neutral
     category: str = ""              # 业绩/订单/政策/重组/调研/分红
-    keywords_hit: List[str] = field(default_factory=list)
+    keywords_hit: list[str] = field(default_factory=list)
     collected_at: str = ""
 
 
@@ -91,7 +88,7 @@ def _apply_sqlite_pragmas(conn: sqlite3.Connection) -> None:
 class EventLibrary:
     """事件持久化 (SQLite events.db)"""
 
-    def __init__(self, db_path: Optional[str] = None):
+    def __init__(self, db_path: str | None = None):
         if db_path:
             self.db_path = db_path
         else:
@@ -149,7 +146,7 @@ class EventLibrary:
     # ── 时间解析（老数据宽容） ──
 
     @staticmethod
-    def _parse_ts(raw) -> Optional[datetime]:
+    def _parse_ts(raw) -> datetime | None:
         """宽容解析 collected_at/event_time：ISO / unix秒 / unix毫秒，失败返回 None"""
         if raw is None:
             return None
@@ -175,7 +172,7 @@ class EventLibrary:
         except Exception:
             return None
 
-    def get_recent(self, code: str, days: int = 7, source: Optional[str] = None) -> List[Event]:
+    def get_recent(self, code: str, days: int = 7, source: str | None = None) -> list[Event]:
         """取某只股票最近事件（days 天时效窗内，按催化强度排序）
 
         SQL 层先按 ISO 日期下界粗筛；unix 时间戳/异格式老数据走宽容解析再过滤。
@@ -206,14 +203,14 @@ class EventLibrary:
         out.sort(key=lambda e: abs(e.catalyst_score), reverse=True)
         return out
 
-    def get_strongest_recent(self, code: str, days: int = 7) -> Optional[Event]:
+    def get_strongest_recent(self, code: str, days: int = 7) -> Event | None:
         """最近一周内催化最强的事件"""
         events = self.get_recent(code, days)
         if not events:
             return None
         return max(events, key=lambda e: abs(e.catalyst_score))
 
-    def list_today(self, limit: int = 200) -> List[Event]:
+    def list_today(self, limit: int = 200) -> list[Event]:
         """今日采集到的全部事件"""
         cur = self._conn.cursor()
         today = datetime.now().strftime("%Y-%m-%d")
@@ -309,12 +306,16 @@ class CatalystScorer:
     def industry_heat(self, industry_text: str) -> float:
         hits = [k for k in INDUSTRY_HEAT if k in industry_text]
         n = len(hits)
-        if n >= 4: return 0.9
-        if n == 3: return 0.75
-        if n == 2: return 0.6
-        if n == 1: return 0.45
+        if n >= 4:
+            return 0.9
+        if n == 3:
+            return 0.75
+        if n == 2:
+            return 0.6
+        if n == 1:
+            return 0.45
         return 0.3
 
 
-def get_event_library(db_path: Optional[str] = None) -> EventLibrary:
+def get_event_library(db_path: str | None = None) -> EventLibrary:
     return EventLibrary(db_path)

@@ -18,7 +18,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional
 
 
 @dataclass
@@ -26,8 +25,8 @@ class FixedSizeFiller:
     """固定按请求量成交（不使用流动性约束）"""
 
     def fill(self, action: str, requested: float, price: float,
-             prev_close: Optional[float] = None, limit_pct: Optional[float] = None,
-             bar_volume: Optional[float] = None) -> float:
+             prev_close: float | None = None, limit_pct: float | None = None,
+             bar_volume: float | None = None) -> float:
         return max(requested, 0.0)
 
 
@@ -47,8 +46,8 @@ class BarVolumeFiller:
         return price <= prev_close * (1 - self.limit_pct) + self.tolerance
 
     def fill(self, action: str, requested: float, price: float,
-             prev_close: Optional[float] = None, limit_pct: Optional[float] = None,
-             bar_volume: Optional[float] = None) -> float:
+             prev_close: float | None = None, limit_pct: float | None = None,
+             bar_volume: float | None = None) -> float:
         """
         action: 'buy' / 'sell'
         requested: 请求量（股）
@@ -59,7 +58,6 @@ class BarVolumeFiller:
         """
         if requested <= 0:
             return 0.0
-        limit = self.limit_pct if limit_pct is None else limit_pct
 
         # 1) 涨跌停拦截：涨停买入 / 跌停卖出 无对手盘
         if prev_close is not None and prev_close > 0:
@@ -79,7 +77,7 @@ class BarVolumeFiller:
         return requested
 
 
-def build_filler(name: Optional[str] = None, **kwargs) -> object:
+def build_filler(name: str | None = None, **kwargs) -> object:
     """按名称构建填充器；None / 'fixed' 返回 FixedSizeFiller"""
     if name in (None, "", "fixed", "FixedSizeFiller"):
         return FixedSizeFiller()

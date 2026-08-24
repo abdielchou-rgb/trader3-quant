@@ -13,8 +13,6 @@ import os
 import tempfile
 import time
 from datetime import datetime, timedelta
-from typing import Any, Dict, Optional
-
 
 # 默认共享状态目录
 _DEFAULT_STATE_DIR = os.path.abspath(
@@ -77,18 +75,18 @@ class SharedState:
     支持版本检查、强制刷新、缓存。
     """
 
-    def __init__(self, state_dir: Optional[str] = None):
+    def __init__(self, state_dir: str | None = None):
         self.state_dir = state_dir or _DEFAULT_STATE_DIR
         os.makedirs(self.state_dir, exist_ok=True)
 
     # ── 核心读写 ──
 
-    def read_json(self, key: str) -> Optional[dict]:
+    def read_json(self, key: str) -> dict | None:
         """读取 JSON 状态（容忍并发下的瞬时缺失）"""
         path = self._path(key, "json")
         if not os.path.exists(path):
             return None
-        with open(path, "r", encoding="utf-8") as f:
+        with open(path, encoding="utf-8") as f:
             return json.load(f)
 
     def write_json(self, key: str, data: dict) -> str:
@@ -99,7 +97,7 @@ class SharedState:
             _atomic_write_bytes(path, payload)
         return path
 
-    def read_bytes(self, key: str, ext: str = "parquet") -> Optional[bytes]:
+    def read_bytes(self, key: str, ext: str = "parquet") -> bytes | None:
         """读取二进制状态（如 parquet 因子截面）"""
         path = self._path(key, ext)
         if not os.path.exists(path):
@@ -114,7 +112,7 @@ class SharedState:
             _atomic_write_bytes(path, data)
         return path
 
-    def list_keys(self, ext: Optional[str] = None) -> list:
+    def list_keys(self, ext: str | None = None) -> list:
         """列出所有状态键"""
         files = os.listdir(self.state_dir)
         if ext:
@@ -127,7 +125,7 @@ class SharedState:
         self,
         key: str,
         max_age_seconds: int = 14400,  # 4 小时
-        default: Optional[dict] = None,
+        default: dict | None = None,
     ) -> dict:
         """
         确保数据不陈旧。
@@ -148,7 +146,7 @@ class SharedState:
 
         return state
 
-    def mark_updated(self, key: str, extra: Optional[dict] = None) -> str:
+    def mark_updated(self, key: str, extra: dict | None = None) -> str:
         """标记状态为刚刚更新（跨进程加锁的读-改-写）"""
         path = self._path(key, "json")
         with _locked(path, "a+"):
@@ -167,7 +165,7 @@ class SharedState:
         """获取数据版本号"""
         return self.ensure_freshness("data_version", max_age_seconds=14400)
 
-    def set_data_version(self, versions: Dict[str, str]) -> str:
+    def set_data_version(self, versions: dict[str, str]) -> str:
         """设置数据版本号"""
         return self.write_json("data_version", {
             "versions": versions,
@@ -191,7 +189,7 @@ class SharedState:
         })
         return self.mark_updated("regime_current", {"data_type": "regime"})
 
-    def get_latest_factors(self) -> Optional[bytes]:
+    def get_latest_factors(self) -> bytes | None:
         """获取最新因子截面"""
         return self.read_bytes("factor_latest", "parquet")
 
@@ -199,7 +197,7 @@ class SharedState:
         """设置最新因子截面"""
         return self.write_bytes("factor_latest", data, "parquet")
 
-    def get_latest_signals(self) -> Optional[bytes]:
+    def get_latest_signals(self) -> bytes | None:
         """获取最新信号截面"""
         return self.read_bytes("signals_latest", "parquet")
 

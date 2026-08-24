@@ -1,10 +1,12 @@
-"""
+r"""
 P1-② 每周策略汇总报告
 用法：python weekly_report.py [--output D:\Marvis\output\] [--week 2026-08-11]
 """
-import argparse, json, os, sys
-from datetime import datetime, timedelta
+import argparse
+import json
+import os
 from collections import defaultdict
+from datetime import datetime, timedelta
 
 PROJECT = r"D:\Claude\projects\3号交易员"
 STATE_FILE = os.path.join(PROJECT, "evolve", "last_daily_run.json")
@@ -20,7 +22,7 @@ def load_daily_states(output_dir: str, week_start: str) -> list:
     states = []
     for fname in daily_files[:7]:
         path = os.path.join(output_dir, fname)
-        states.append(json.load(open(path, "r", encoding="utf-8")))
+        states.append(json.load(open(path, encoding="utf-8")))
     return states
 
 def build_report(week_start: str, week_end: str, states: list) -> dict:
@@ -102,7 +104,7 @@ def write_markdown_report(report: dict, output_dir: str) -> str:
             )
         lines.append("")
 
-    lines.append(f"---\n*报告由 weekly_report.py 自动生成*")
+    lines.append("---\n*报告由 weekly_report.py 自动生成*")
 
     with open(md_path, "w", encoding="utf-8") as f:
         f.write("\n".join(lines))

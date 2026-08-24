@@ -1,0 +1,32 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+          # pyproject 仅声明 pyyaml(+pytest)；以下为源码隐式依赖，CI 显式安装。
+          # akshare 依赖较重（纯 Python，安装约 1-2 分钟），但 collector/sources 相关测试需要，保留。
+          pip install numpy pandas akshare hmmlearn fastapi uvicorn httpx ruff mypy
+
+      - name: Lint (ruff)
+        run: ruff check .
+
+      - name: Type check (mypy, 3-file baseline)
+        run: mypy
+
+      - name: Test (pytest)
+        run: pytest tests/ -q

@@ -35,8 +35,6 @@ trader3/
 
 from __future__ import annotations
 
-from typing import Optional
-
 from trader3.base_tool import BaseTool, ChartSpec, Trader3Response
 from trader3.gates import GateResult, Trader3Gates
 from trader3.models import (
@@ -54,6 +52,29 @@ from trader3.models import (
 )
 from trader3.registry import ToolRegistry
 from trader3.shared_state import SharedState
+
+# 公开 API（嵌入模式：from trader3 import Trader3, ...）
+__all__ = [
+    "BacktestReport",
+    "BaseTool",
+    "ChartSpec",
+    "ExecutionPlan",
+    "GateResult",
+    "OptimizationResult",
+    "PortfolioConstraints",
+    "RegimeDiagnosis",
+    "ScorecardReport",
+    "SharedState",
+    "SignalValidationReport",
+    "StrategyConfig",
+    "TCAEstimate",
+    "Trader3",
+    "Trader3Gates",
+    "Trader3Response",
+    "ToolRegistry",
+    "ValuationReport",
+    "WFAReport",
+]
 
 
 class Trader3:
@@ -81,10 +102,10 @@ class Trader3:
     def _register_tools(self):
         """注册所有内置 Tool"""
         from trader3.tools.backtest import RunBacktestTool, WalkForwardAnalysisTool
-        from trader3.tools.optimize import OptimizePortfolioTool, RegimeAwareAllocationTool
         from trader3.tools.execution import EstimateTransactionCostTool, GenerateExecutionPlanTool
-        from trader3.tools.signal import ValidateSignalTool, DiagnoseMarketRegimeTool
-        from trader3.tools.valuation import ValuationAnchorTool, FundamentalScorecardTool
+        from trader3.tools.optimize import OptimizePortfolioTool, RegimeAwareAllocationTool
+        from trader3.tools.signal import DiagnoseMarketRegimeTool, ValidateSignalTool
+        from trader3.tools.valuation import FundamentalScorecardTool, ValuationAnchorTool
 
         for tool_cls in [
             RunBacktestTool,
@@ -233,7 +254,7 @@ class Trader3:
         wl.close()
         return ok
 
-    def watchlist_events(self, code: Optional[str] = None, limit: int = 20) -> list:
+    def watchlist_events(self, code: str | None = None, limit: int = 20) -> list:
         """状态迁移事件（审计用）"""
         from trader3.v2.watchlist import get_watchlist
         wl = get_watchlist()
@@ -244,7 +265,7 @@ class Trader3:
 
     # ── 三因子触发 ──
 
-    def trigger_scan(self, catalyst_scores: Optional[dict] = None) -> list:
+    def trigger_scan(self, catalyst_scores: dict | None = None) -> list:
         """扫描自选股三因子（催化×预期差×技术），催化自动从事件库读取"""
         from trader3.v2.trigger import get_trigger_engine
         from trader3.v2.watchlist import get_watchlist
@@ -266,7 +287,7 @@ class Trader3:
     # ── 可比公司分析 ──
 
     def comps_analysis(self, code: str, industry: str = "",
-                       peer_codes: Optional[list] = None, n_peers: int = 8) -> dict:
+                       peer_codes: list | None = None, n_peers: int = 8) -> dict:
         """可比公司分析：建可比池 → 倍数 + 四分位 → 异常标红 → 溢价/折价结论"""
         from trader3.v2.comps import get_comps_analyzer
         analyzer = get_comps_analyzer()
@@ -275,12 +296,12 @@ class Trader3:
 
     # ── 每日管线 ──
 
-    def daily_run(self, codes: Optional[list] = None, collect_only: bool = False) -> dict:
+    def daily_run(self, codes: list | None = None, collect_only: bool = False) -> dict:
         """每日扫描：采集事件 → 三因子触发 → 状态迁移（对齐 daily_pipeline）"""
         from trader3.v2.daily_pipeline import run_daily
         return run_daily(codes=codes, collect_only=collect_only)
 
-    def daily_alert_text(self, summary: Optional[dict] = None) -> str:
+    def daily_alert_text(self, summary: dict | None = None) -> str:
         """把每日扫描结果格式化为提醒文本（写作规范三道关）"""
         from trader3.v2.daily_pipeline import format_alerts
         if summary is None:

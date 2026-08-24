@@ -28,14 +28,13 @@
 
 from __future__ import annotations
 
+import builtins
 import json
 import logging
-import os
 import sqlite3
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional
 
 logger = logging.getLogger("trader3.v2.watchlist")
 
@@ -63,7 +62,7 @@ SELL_TRIGGERED = "卖出触发"
 ALL_STATES = [UNTRACKED, OBSERVING, ATTENTION, BUY_ZONE, HOLDING, ALERT, SELL_TRIGGERED]
 
 # 状态迁移白名单：{当前状态: 允许迁移到的状态列表}
-TRANSITIONS: Dict[str, List[str]] = {
+TRANSITIONS: dict[str, list[str]] = {
     UNTRACKED: [OBSERVING],
     OBSERVING: [ATTENTION, ALERT, UNTRACKED],
     ATTENTION: [BUY_ZONE, OBSERVING, ALERT, UNTRACKED],
@@ -109,7 +108,7 @@ class StatusChange:
     to_status: str
     reason: str = ""
     event_time: str = ""
-    trigger_data: Dict = field(default_factory=dict)
+    trigger_data: dict = field(default_factory=dict)
 
 
 class WatchlistDB:
@@ -122,7 +121,7 @@ class WatchlistDB:
                      reason, event_time, trigger_data TEXT)
     """
 
-    def __init__(self, db_path: Optional[str] = None):
+    def __init__(self, db_path: str | None = None):
         if db_path:
             self.db_path = db_path
         else:
@@ -194,13 +193,13 @@ class WatchlistDB:
         self._conn.commit()
         return True
 
-    def get(self, code: str) -> Optional[WatchItem]:
+    def get(self, code: str) -> WatchItem | None:
         cur = self._conn.cursor()
         cur.execute("SELECT * FROM watch_items WHERE code=?", (code,))
         row = cur.fetchone()
         return self._row_to_item(row) if row else None
 
-    def list(self, status: Optional[str] = None) -> List[WatchItem]:
+    def list(self, status: str | None = None) -> builtins.list[WatchItem]:
         cur = self._conn.cursor()
         if status:
             cur.execute("SELECT * FROM watch_items WHERE status=? ORDER BY code", (status,))
@@ -208,14 +207,14 @@ class WatchlistDB:
             cur.execute("SELECT * FROM watch_items ORDER BY code")
         return [self._row_to_item(r) for r in cur.fetchall()]
 
-    def list_by_priority(self) -> List[WatchItem]:
+    def list_by_priority(self) -> builtins.list[WatchItem]:
         """按状态优先级排序（卖出触发/买入区间/预警在前）"""
         items = self.list()
         items.sort(key=lambda x: PRIORITY.get(x.status, 99))
         return items
 
     def transition(self, code: str, to_status: str, reason: str = "",
-                   trigger_data: Optional[Dict] = None) -> bool:
+                   trigger_data: dict | None = None) -> bool:
         """状态迁移（校验白名单），返回是否成功"""
         item = self.get(code)
         if not item:
@@ -247,7 +246,7 @@ class WatchlistDB:
         self._conn.commit()
 
     def _record_event(self, code: str, from_status: str, to_status: str,
-                      reason: str = "", trigger_data: Optional[Dict] = None) -> None:
+                      reason: str = "", trigger_data: dict | None = None) -> None:
         cur = self._conn.cursor()
         cur.execute(
             "INSERT INTO watch_events(code,from_status,to_status,reason,event_time,trigger_data) "
@@ -257,7 +256,7 @@ class WatchlistDB:
              json.dumps(trigger_data or {}, ensure_ascii=False)),
         )
 
-    def events(self, code: Optional[str] = None, limit: int = 20) -> List[StatusChange]:
+    def events(self, code: str | None = None, limit: int = 20) -> builtins.list[StatusChange]:
         cur = self._conn.cursor()
         if code:
             cur.execute(
@@ -292,5 +291,5 @@ class WatchlistDB:
 
 # ── 便捷入口 ──
 
-def get_watchlist(db_path: Optional[str] = None) -> WatchlistDB:
+def get_watchlist(db_path: str | None = None) -> WatchlistDB:
     return WatchlistDB(db_path)

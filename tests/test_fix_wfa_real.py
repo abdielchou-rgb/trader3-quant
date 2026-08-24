@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 审计修复验证（backtest 伪归因清除 + WFA 真实化）：
 
@@ -7,17 +6,16 @@
 3. test_wfa_nonoverlap_default        — 默认 step==test_window（非重叠）；显式更小 step 触发重叠警告
 4. test_oos_concat_metrics            — 拼接 OOS 日收益的年化/夏普公式（已知序列手工验证）
 """
-import sys
-import os
-import math
 import datetime as dt
+import math
+import os
+import sys
 from dataclasses import asdict
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import numpy as np
 import pytest
-
 
 # ── 小型 qlib 目录构造工具 ──
 
@@ -75,7 +73,6 @@ def test_report_has_no_fake_attribution(monkeypatch, tmp_path):
     - 模型字段为空（填充处已删除硬编码常数拆分）；
     - caveats 明示"行业归因(Brinson)与风险暴露(Barra)...当前版本不提供"。"""
     import trader3.data_provider as dp_mod
-    import trader3.tools.backtest as btmod
 
     # 强制合成回退路径：探测与 QlibDataProvider 默认目录解析一并封死
     monkeypatch.setattr(dp_mod, "find_qlib_dir", lambda: None)

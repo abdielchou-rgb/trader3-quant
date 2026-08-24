@@ -5,10 +5,9 @@
 from __future__ import annotations
 
 import os
-from typing import Any, Dict, Optional
+from typing import Any
 
 import yaml
-
 
 # 默认配置路径（相对于项目根目录）
 _DEFAULT_CONFIG_DIR = os.path.join(os.path.dirname(__file__), "..", "config")
@@ -16,11 +15,11 @@ _DEFAULT_CONFIG_DIR = os.path.join(os.path.dirname(__file__), "..", "config")
 
 def load_yaml(path: str) -> dict:
     """加载 YAML 配置文件"""
-    with open(path, "r", encoding="utf-8") as f:
+    with open(path, encoding="utf-8") as f:
         return yaml.safe_load(f) or {}
 
 
-def resolve_path(relative_path: str, base_dir: Optional[str] = None) -> str:
+def resolve_path(relative_path: str, base_dir: str | None = None) -> str:
     """解析配置路径（支持相对路径和绝对路径）"""
     if os.path.isabs(relative_path):
         return relative_path
@@ -36,9 +35,9 @@ def resolve_path(relative_path: str, base_dir: Optional[str] = None) -> str:
 class ConfigManager:
     """配置管理器（YAML + 环境变量覆盖）"""
 
-    def __init__(self, config_dir: Optional[str] = None):
+    def __init__(self, config_dir: str | None = None):
         self.config_dir = config_dir or _DEFAULT_CONFIG_DIR
-        self._cache: Dict[str, dict] = {}
+        self._cache: dict[str, dict] = {}
 
     def load(self, name: str, env_prefix: str = "T3_") -> dict:
         """

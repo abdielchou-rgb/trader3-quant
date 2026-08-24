@@ -14,11 +14,9 @@ import sys
 import tempfile
 from datetime import datetime, timedelta
 
-import pytest
-
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from trader3.v2.events import Event, EventLibrary, get_event_library
+from trader3.v2.events import Event, get_event_library
 from trader3.v2.trigger import TriggerEngine
 from trader3.v2.watchlist import ATTENTION, BUY_ZONE, WatchlistDB
 
@@ -85,8 +83,6 @@ class TestCompsTTM:
 
     def test_comps_ttm_math(self, monkeypatch):
         from trader3.v2 import comps as comps_mod
-
-        tmp = tempfile.mkdtemp()
 
         class FakeFP:
             def get_latest_financials(self, code):

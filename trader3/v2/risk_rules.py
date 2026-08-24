@@ -14,7 +14,6 @@
 from __future__ import annotations
 
 import json
-from typing import List, Optional, Tuple
 
 
 class BaseRiskRule:
@@ -24,7 +23,7 @@ class BaseRiskRule:
     description: str = ""
     enabled: bool = True
 
-    def check(self, **ctx) -> Tuple[bool, str]:
+    def check(self, **ctx) -> tuple[bool, str]:
         """返回 (通过?, 原因)"""
         raise NotImplementedError
 
@@ -35,11 +34,11 @@ class BlacklistRule(BaseRiskRule):
     rule_name = "blacklist"
     description = "禁止交易黑名单标的（ST/退市/指定）"
 
-    def __init__(self, blacklist: Optional[List[str]] = None):
+    def __init__(self, blacklist: list[str] | None = None):
         self.blacklist = set(blacklist or [])
         self.st_prefix_block = True  # ST 一律禁买
 
-    def check(self, **ctx) -> Tuple[bool, str]:
+    def check(self, **ctx) -> tuple[bool, str]:
         code = ctx.get("code", "")
         name = str(ctx.get("name", "") or "")
         action = ctx.get("action", "buy")
@@ -66,7 +65,7 @@ class SingleOrderLimitRule(BaseRiskRule):
         self.max_value = max_value   # 单笔最大金额（元）
         self.max_pct = max_pct       # 单笔占组合最大比例
 
-    def check(self, **ctx) -> Tuple[bool, str]:
+    def check(self, **ctx) -> tuple[bool, str]:
         value = float(ctx.get("value", 0) or 0)
         if value > self.max_value:
             return False, f"单笔超限: {value:.0f} > 上限 {self.max_value:.0f}"
@@ -89,7 +88,7 @@ class TimeWindowFlowControlRule(BaseRiskRule):
         self.window_seconds = window_seconds
         self.max_orders_in_window = max_orders_in_window
 
-    def check(self, **ctx) -> Tuple[bool, str]:
+    def check(self, **ctx) -> tuple[bool, str]:
         day_orders = int(ctx.get("day_orders", 0) or 0)
         day_value = float(ctx.get("day_value", 0) or 0)
         window_orders = int(ctx.get("window_orders", 0) or 0)
@@ -112,7 +111,7 @@ class PositionLimitRule(BaseRiskRule):
         self.max_single_pos = max_single_pos
         self.max_total_pos = max_total_pos
 
-    def check(self, **ctx) -> Tuple[bool, str]:
+    def check(self, **ctx) -> tuple[bool, str]:
         pos_pct = float(ctx.get("position_pct", 0) or 0)
         if pos_pct + float(ctx.get("add_pct", 0) or 0) > self.max_single_pos:
             return False, f"单票仓位超限: {pos_pct:.1%} -> {self.max_single_pos:.1%}"
@@ -131,7 +130,7 @@ class PriceBandRule(BaseRiskRule):
     def __init__(self, max_dev: float = 0.095):
         self.max_dev = max_dev  # 偏离基准价上限（A股涨停一般±10%，留缓冲）
 
-    def check(self, **ctx) -> Tuple[bool, str]:
+    def check(self, **ctx) -> tuple[bool, str]:
         price = float(ctx.get("price", 0) or 0)
         ref = float(ctx.get("ref_price", 0) or 0)
         if price and ref and ref > 0:
@@ -147,16 +146,16 @@ class RiskRuleChain:
     规则按序执行，任一失败即记录并阻断。
     """
 
-    def __init__(self, rules: Optional[List[BaseRiskRule]] = None, log_path: str = ""):
+    def __init__(self, rules: list[BaseRiskRule] | None = None, log_path: str = ""):
         self.rules = rules or []
         self.log_path = log_path or ""
-        self._history: List[dict] = []
+        self._history: list[dict] = []
 
-    def add(self, rule: BaseRiskRule) -> "RiskRuleChain":
+    def add(self, rule: BaseRiskRule) -> RiskRuleChain:
         self.rules.append(rule)
         return self
 
-    def check(self, **ctx) -> Tuple[bool, str]:
+    def check(self, **ctx) -> tuple[bool, str]:
         """逐条风控。返回 (整体通过?, 原因)
 
         ctx 可用字段：code/name/action/value/price/ref_price/value_pct/
@@ -194,7 +193,7 @@ class RiskRuleChain:
         self._history = []
 
 
-def build_default_chain(blacklist: Optional[List[str]] = None) -> RiskRuleChain:
+def build_default_chain(blacklist: list[str] | None = None) -> RiskRuleChain:
     """构建默认风控链（顺序敏感：名单→限额→仓位→价格→流控）"""
     return RiskRuleChain([
         BlacklistRule(blacklist),

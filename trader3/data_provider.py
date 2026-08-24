@@ -21,10 +21,35 @@ from __future__ import annotations
 
 import os
 import warnings
-from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 
+# ── 跨实例 mtime 缓存 ──────────────────────────────
+# 键含 (mtime_ns, size)：外部管线（update_market_data）改写文件后自动失效，
+# 进程内多实例（CLI→WFA→signal 反复建 provider）共享同一份解析结果。
+_TEXT_CACHE: dict[tuple[str, int, int], list[str]] = {}
+_BIN_CACHE: dict[tuple[str, int, int], bytes] = {}
+
+
+def _stat_key(path: str) -> tuple[str, int, int]:
+    st = os.stat(path)
+    return (os.path.abspath(path), st.st_mtime_ns, st.st_size)
+
+
+def _read_text_lines_cached(path: str) -> list[str]:
+    key = _stat_key(path)
+    if key not in _TEXT_CACHE:
+        with open(path) as f:
+            _TEXT_CACHE[key] = [line.strip() for line in f if line.strip()]
+    return _TEXT_CACHE[key]
+
+
+def _read_bin_cached(path: str) -> bytes:
+    key = _stat_key(path)
+    if key not in _BIN_CACHE:
+        with open(path, "rb") as f:
+            _BIN_CACHE[key] = f.read()
+    return _BIN_CACHE[key]
 
 # ── 可配置数据目录 ──
 DEFAULT_QLIB_DATA_DIR = os.environ.get(
@@ -50,12 +75,12 @@ class QlibDataProvider:
                            start='2020-01-01', end='2024-12-31')
     """
 
-    def __init__(self, data_dir: Optional[str] = None):
+    def __init__(self, data_dir: str | None = None):
         self.data_dir = self._resolve_data_dir(data_dir)
-        self._calendars: Optional[List[str]] = None
-        self._instruments_cache: Dict[Tuple[str, Optional[str]], List[str]] = {}
+        self._calendars: list[str] | None = None
+        self._instruments_cache: dict[tuple[str, str | None], list[str]] = {}
 
-    def _resolve_data_dir(self, data_dir: Optional[str]) -> str:
+    def _resolve_data_dir(self, data_dir: str | None) -> str:
         if data_dir and os.path.isdir(data_dir):
             return data_dir
         if os.path.isdir(DEFAULT_QLIB_DATA_DIR):
@@ -70,15 +95,15 @@ class QlibDataProvider:
 
     # ── 日历 ──
 
-    def calendar(self) -> List[str]:
-        """交易日历（升序日期列表）"""
+    def calendar(self) -> list[str]:
+        """交易日历（升序日期列表）。跨实例 mtime 缓存：外部改写 day.txt 后自动失效。"""
         if self._calendars is None:
-            path = os.path.join(self.data_dir, "calendars", "day.txt")
-            with open(path, "r") as f:
-                self._calendars = [line.strip() for line in f if line.strip()]
+            self._calendars = _read_text_lines_cached(
+                os.path.join(self.data_dir, "calendars", "day.txt")
+            )
         return self._calendars
 
-    def trading_days_between(self, start: str, end: str) -> List[str]:
+    def trading_days_between(self, start: str, end: str) -> list[str]:
         """返回 [start, end] 内的交易日"""
         cal = self.calendar()
         # 二分定位
@@ -87,7 +112,7 @@ class QlibDataProvider:
         return cal[lo:hi]
 
     @staticmethod
-    def _lower_bound(arr: List[str], target: str) -> int:
+    def _lower_bound(arr: list[str], target: str) -> int:
         lo, hi = 0, len(arr)
         while lo < hi:
             mid = (lo + hi) // 2
@@ -98,7 +123,7 @@ class QlibDataProvider:
         return lo
 
     @staticmethod
-    def _upper_bound(arr: List[str], target: str) -> int:
+    def _upper_bound(arr: list[str], target: str) -> int:
         lo, hi = 0, len(arr)
         while lo < hi:
             mid = (lo + hi) // 2
@@ -110,7 +135,7 @@ class QlibDataProvider:
 
     # ── 股票列表 ──
 
-    def instruments(self, universe: str = "all", asof_date: Optional[str] = None) -> List[str]:
+    def instruments(self, universe: str = "all", asof_date: str | None = None) -> list[str]:
         """
         返回股票代码列表（去重，按代码排序）。
         universe: all / csi300 / csi500 / csi800 / csi1000
@@ -129,7 +154,7 @@ class QlibDataProvider:
             return []
 
         instruments = set()
-        with open(path, "r") as f:
+        with open(path) as f:
             for line in f:
                 line = line.strip()
                 if not line:
@@ -152,7 +177,7 @@ class QlibDataProvider:
 
     def load_stock(
         self, instrument: str, field: str, start: str = "2000-01-01", end: str = "2100-01-01"
-    ) -> Tuple[np.ndarray, List[str]]:
+    ) -> tuple[np.ndarray, list[str]]:
         """
         读取单只股票单字段。
 
@@ -178,7 +203,7 @@ class QlibDataProvider:
         if not os.path.exists(field_path):
             return np.array([]), []
 
-        values = np.fromfile(field_path, dtype="<f4").astype(np.float64)
+        values = np.frombuffer(_read_bin_cached(field_path), dtype="<f4").astype(np.float64)
 
         # 确定上市日期
         listing_start = self._listing_start(instrument)
@@ -229,26 +254,25 @@ class QlibDataProvider:
         return instrument.lower()
 
     def _listing_start(self, instrument: str) -> str:
-        """返回该股票最早的上市日期（或空）"""
+        """返回该股票最早的上市日期（或空）。all.txt 解析走跨实例缓存。"""
         path = os.path.join(self.data_dir, "instruments", "all.txt")
         if not os.path.exists(path):
             return ""
-        with open(path, "r") as f:
-            for line in f:
-                parts = line.strip().split("\t")
-                if parts and parts[0].upper() == instrument:
-                    return parts[1] if len(parts) > 1 else ""
+        for line in _read_text_lines_cached(path):
+            parts = line.split("\t")
+            if parts and parts[0].strip().upper() == instrument:
+                return parts[1] if len(parts) > 1 else ""
         return ""
 
     # ── 面板数据 ──
 
     def load_panel(
         self,
-        instruments: List[str],
-        fields: List[str],
+        instruments: list[str],
+        fields: list[str],
         start: str = "2020-01-01",
         end: str = "2025-12-31",
-    ) -> Dict[str, np.ndarray]:
+    ) -> dict[str, dict[str, np.ndarray]]:
         """
         读取多股票多字段面板。
 
@@ -256,7 +280,7 @@ class QlibDataProvider:
         -------
         {instrument: {field: np.ndarray}} — 每只股票按自身上市区间对齐
         """
-        result: Dict[str, Dict[str, np.ndarray]] = {}
+        result: dict[str, dict[str, np.ndarray]] = {}
         for inst in instruments:
             stock = {}
             for fld in fields:
@@ -268,8 +292,8 @@ class QlibDataProvider:
     # ── 便捷方法 ──
 
     def load_returns(
-        self, instruments: List[str], start: str = "2020-01-01", end: str = "2025-12-31"
-    ) -> Dict[str, np.ndarray]:
+        self, instruments: list[str], start: str = "2020-01-01", end: str = "2025-12-31"
+    ) -> dict[str, np.ndarray]:
         """读取日收益率（用 close 差分）"""
         returns = {}
         for inst in instruments:
@@ -285,7 +309,7 @@ class QlibDataProvider:
 
     def load_index_returns(
         self, index_code: str = "SH000300", start: str = "2020-01-01", end: str = "2025-12-31"
-    ) -> Tuple[np.ndarray, List[str]]:
+    ) -> tuple[np.ndarray, list[str]]:
         """读取指数收益率（作为基准）"""
         close, dates = self.load_stock(index_code, "close", start, end)
         if len(close) < 2:
@@ -294,7 +318,7 @@ class QlibDataProvider:
         r = np.where(np.isfinite(r), r, 0.0)
         return r, dates[1:]
 
-    def available_fields(self, instrument: str) -> List[str]:
+    def available_fields(self, instrument: str) -> list[str]:
         """查看某股票可用的字段"""
         dir_name = self._dir_name(instrument)
         path = os.path.join(self.data_dir, "features", dir_name)
@@ -302,7 +326,7 @@ class QlibDataProvider:
             return []
         return sorted(f.split(".")[0] for f in os.listdir(path) if f.endswith(".day.bin"))
 
-    def describe(self) -> Dict[str, int]:
+    def describe(self) -> dict[str, int | str]:
         """数据目录概览"""
         cal = self.calendar()
         instruments = self.instruments("all")
@@ -315,7 +339,7 @@ class QlibDataProvider:
         }
 
 
-def find_qlib_dir() -> Optional[str]:
+def find_qlib_dir() -> str | None:
     """探测可用的 qlib 数据目录"""
     for candidate in [
         DEFAULT_QLIB_DATA_DIR,

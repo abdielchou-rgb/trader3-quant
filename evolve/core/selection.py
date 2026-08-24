@@ -7,9 +7,7 @@
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional
 
 import numpy as np
 
@@ -20,7 +18,7 @@ class SelectionResult:
     expr: str
     passed: bool
     score: float = 0.0
-    gates: Dict[str, dict] = field(default_factory=dict)  # {gate_name: {passed, value}}
+    gates: dict[str, dict] = field(default_factory=dict)  # {gate_name: {passed, value}}
     reason: str = ""
 
 
@@ -52,10 +50,10 @@ class StrategySelector:
         self.monotonicity_min = monotonicity_min
         self.long_short_min = long_short_min
         self.max_nodes = max_nodes
-        self._selected_exprs: List[str] = []
-        self._selected_values: List[np.ndarray] = []
+        self._selected_exprs: list[str] = []
+        self._selected_values: list[np.ndarray] = []
 
-    def select(self, candidates: List[dict]) -> List[SelectionResult]:
+    def select(self, candidates: list[dict]) -> list[SelectionResult]:
         """
         筛选候选。
 
@@ -72,7 +70,7 @@ class StrategySelector:
         """
         order = sorted(range(len(candidates)),
                        key=lambda i: candidates[i].get("fitness", -999), reverse=True)
-        results: List[Optional[SelectionResult]] = [None] * len(candidates)
+        results: list[SelectionResult | None] = [None] * len(candidates)
         for i in order:
             results[i] = self._evaluate_one(candidates[i])
         return results  # type: ignore[return-value]
@@ -128,7 +126,7 @@ class StrategySelector:
             reason=reason,
         )
 
-    def select_best(self, candidates: List[dict], top_k: int = 5) -> List[SelectionResult]:
+    def select_best(self, candidates: list[dict], top_k: int = 5) -> list[SelectionResult]:
         """筛选 + 取 Top-K"""
         results = self.select(candidates)
         passed = [r for r in results if r.passed]
@@ -170,6 +168,6 @@ def _expr_similarity(e1: str, e2: str) -> float:
     return inter / union if union > 0 else 0.0
 
 
-def _tokenize_expr(expr: str) -> List[str]:
+def _tokenize_expr(expr: str) -> list[str]:
     import re
     return re.findall(r"[a-zA-Z_][a-zA-Z0-9_]*|\d+", expr)

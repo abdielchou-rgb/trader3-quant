@@ -29,10 +29,8 @@ from __future__ import annotations
 import argparse
 import os
 import shutil
-import struct
 import sys
 from datetime import datetime
-from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 
@@ -43,7 +41,7 @@ BIN_DTYPE = "<f4"
 INDEX_CODE = "sh000300"
 
 
-def _dp(data_dir: Optional[str]):
+def _dp(data_dir: str | None):
     if data_dir:
         from trader3.data_provider import QlibDataProvider
         return QlibDataProvider(data_dir=data_dir)
@@ -53,7 +51,7 @@ def _dp(data_dir: Optional[str]):
 
 # ── 行情抓取 ────────────────────────────────────────────
 
-def fetch_index_history() -> Tuple[List[Tuple[str, float]], str]:
+def fetch_index_history() -> tuple[list[tuple[str, float]], str]:
     """抓取 SH000300 日线收盘序列 [(date, close)]，双源降级。"""
     import akshare as ak
 
@@ -80,7 +78,7 @@ def _normalize_code(code: str) -> str:
     return c
 
 
-def fetch_stock_close(code: str, start: str) -> List[Tuple[str, float]]:
+def fetch_stock_close(code: str, start: str) -> list[tuple[str, float]]:
     """抓取个股日线收盘（前复权），[(date, close)]。"""
     import akshare as ak
 
@@ -115,7 +113,7 @@ def write_bin_atomic(path: str, arr: np.ndarray) -> None:
 
 # ── 计划与执行 ──────────────────────────────────────────
 
-def plan_index(dp, rows: List[Tuple[str, float]]) -> dict:
+def plan_index(dp, rows: list[tuple[str, float]]) -> dict:
     cal = list(dp.calendar())
     cal_set = set(cal)
     row_map = dict(rows)
@@ -138,7 +136,7 @@ def _key_for(data_dir: str, path: str) -> str:
     return rel.replace(os.sep, "__")
 
 
-def _backup(paths: List[str], backup_dir: str, data_dir: str = "") -> None:
+def _backup(paths: list[str], backup_dir: str, data_dir: str = "") -> None:
     os.makedirs(backup_dir, exist_ok=True)
     for p in paths:
         key = _key_for(data_dir, p) if data_dir else os.path.basename(p)
@@ -151,7 +149,7 @@ def _backup(paths: List[str], backup_dir: str, data_dir: str = "") -> None:
             shutil.copytree(p, dst)
 
 
-def _index_anchor(dp, cal: List[str]) -> Tuple[str, int]:
+def _index_anchor(dp, cal: list[str]) -> tuple[str, int]:
     """读 all.txt 中指数的上市锚点；缺省视为日历首日。返回 (listing, i0)。"""
     all_txt = os.path.join(dp.data_dir, "instruments", "all.txt")
     lst = None
@@ -167,14 +165,13 @@ def _index_anchor(dp, cal: List[str]) -> Tuple[str, int]:
     return lst, cal.index(lst)
 
 
-def apply_index(dp, rows: List[Tuple[str, float]], plan: dict, backup_root: str) -> dict:
+def apply_index(dp, rows: list[tuple[str, float]], plan: dict, backup_root: str) -> dict:
     """
     按指数自身上市锚点对齐重建 bin + 扩展日历。
 
     bin 长度 == len(cal_new) - i0（与 all.txt 锚点一致，满足加载端契约）；
     先备份，写入或校验失败由调用方回滚。
     """
-    import bisect
 
     data_dir = dp.data_dir
     cal = list(dp.calendar())
@@ -263,8 +260,8 @@ def _restore(backup_dir: str, data_dir: str) -> None:
             shutil.copy2(src, dst)
 
 
-def verify_index(dp, rows: List[Tuple[str, float]], expect_cal_len: int,
-                 expect_bin_len: Optional[int] = None) -> Tuple[bool, str]:
+def verify_index(dp, rows: list[tuple[str, float]], expect_cal_len: int,
+                 expect_bin_len: int | None = None) -> tuple[bool, str]:
     # 用全新实例校验（绕过同实例的日历/bin 进程内缓存，等价于重启后视角）
     try:
         from trader3.data_provider import QlibDataProvider
@@ -304,8 +301,8 @@ def _effective_len(path: str) -> int:
     return max(len(arr) - n_lead - n_tail, 0)
 
 
-def plan_stocks(dp, codes: List[str], k_new: int = 0,
-                max_heal_days: int = 30) -> List[dict]:
+def plan_stocks(dp, codes: list[str], k_new: int = 0,
+                max_heal_days: int = 30) -> list[dict]:
     """
     尾部缺口窗口规则（在日历可能已扩展后调用）。
 
@@ -319,8 +316,8 @@ def plan_stocks(dp, codes: List[str], k_new: int = 0,
     import bisect
 
     cal = list(dp.calendar())
-    plans: List[dict] = []
-    listing_cache: Dict[str, str] = {}
+    plans: list[dict] = []
+    listing_cache: dict[str, str] = {}
 
     all_txt = os.path.join(dp.data_dir, "instruments", "all.txt")
     with open(all_txt, encoding="utf-8") as f:
@@ -362,7 +359,7 @@ def plan_stocks(dp, codes: List[str], k_new: int = 0,
     return plans
 
 
-def apply_stock_append(dp, plans: List[dict], fetch_start: str, backup_root: str) -> dict:
+def apply_stock_append(dp, plans: list[dict], fetch_start: str, backup_root: str) -> dict:
     """对 action==append 的股票：拉取新增窗口收盘，按新日历日期逐行补齐全部字段。"""
     data_dir = dp.data_dir
     done, skipped = [], []
@@ -409,7 +406,7 @@ def main():
     args = ap.parse_args()
 
     dp = _dp(args.data_dir)
-    print(f"[1/5] 抓取指数行情 ...")
+    print("[1/5] 抓取指数行情 ...")
     rows, source = fetch_index_history()
     print(f"      来源={source} 条数={len(rows)} 末条={rows[-1]}")
 

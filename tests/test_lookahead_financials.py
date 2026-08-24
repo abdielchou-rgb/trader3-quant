@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 批次2 防前视验证：历史财务按公告日对齐（financials_asof）。
 
@@ -7,8 +6,8 @@
 2. comps.analyze 的 asof_date 防前视（_company_snapshot 按公告日读取）
 3. backtest.get_financials_asof 辅助查询
 """
-import sys
 import os
+import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 

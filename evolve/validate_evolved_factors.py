@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """
 validate_evolved_factors.py — 进化因子回测验证
 
@@ -17,7 +16,6 @@ validate_evolved_factors.py — 进化因子回测验证
 import argparse
 import json
 import sys
-import time
 from pathlib import Path
 
 import numpy as np
@@ -35,7 +33,7 @@ TRADING_COST = 0.0015  # 单边交易成本（佣金+滑点+冲击），A股实�
 
 def load_factors(path: Path) -> list:
     """从 selected.json 读取因子列表"""
-    with open(path, "r", encoding="utf-8") as f:
+    with open(path, encoding="utf-8") as f:
         data = json.load(f)
     return [(d["expr"], d.get("score", 0)) for d in data]
 

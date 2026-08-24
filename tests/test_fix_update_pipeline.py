@@ -14,7 +14,6 @@ sys.path.insert(0, str(_ROOT / "scripts"))
 
 import update_market_data as umd  # noqa: E402
 
-
 CAL = [f"2026-01-{d:02d}" for d in range(1, 23)]  # 22 个交易日
 NEW_DAYS = ["2026-01-23", "2026-01-26"]
 
@@ -81,9 +80,6 @@ def test_restore_recovers_corrupted_bin(tmp_path):
     before_bin = close_path.read_bytes()
     before_cal = day_path.read_bytes()
 
-    from trader3.data_provider import QlibDataProvider
-    dp = QlibDataProvider(data_dir=str(data_dir))
-
     backup_dir = tmp_path / "bk"
     umd._backup([str(day_path), str(close_path)], str(backup_dir), str(data_dir))
     # 篡改现场：日历截短、bin 写垃圾
@@ -109,7 +105,6 @@ def test_stock_append_strict_rules(tmp_path):
         umd.write_bin_atomic(str(over_dir / f"{f}.day.bin"), long_arr)
 
     big_gap_dir = data_dir / "features" / "sz000001"
-    tiny = np.arange(2, dtype=np.float64) + 20.0
     for f in ("open", "close", "volume"):
         umd.write_bin_atomic(str(big_gap_dir / f"{f}.day.bin"), np.arange(1, dtype=np.float64))
     with open(data_dir / "instruments" / "all.txt", "a", encoding="utf-8") as f:
@@ -157,7 +152,6 @@ def test_stock_append_heals_legacy_drift(tmp_path):
 
     # 模拟遗留漂移：raw=20（旧期望22，漂移2），扩展后期望24 → 需补 4 行
     d = data_dir / "features" / "sh600519"
-    old_close = umd.read_bin(str(d / "close.day.bin"))
     for f in ("open", "close", "volume"):
         o = umd.read_bin(str(d / f"{f}.day.bin"))
         umd.write_bin_atomic(str(d / f"{f}.day.bin"), o[:-2])
@@ -165,7 +159,10 @@ def test_stock_append_heals_legacy_drift(tmp_path):
     from trader3.data_provider import QlibDataProvider
     dp = QlibDataProvider(data_dir=str(data_dir))
     hist = {d_: 10.0 + i for i, d_ in enumerate(CAL[-2:] + NEW_DAYS)}
-    monkeypatched = lambda code, start: list(hist.items())
+
+    def monkeypatched(code, start):
+        return list(hist.items())
+
     orig_fetch = umd.fetch_stock_close
     umd.fetch_stock_close = monkeypatched
     try:

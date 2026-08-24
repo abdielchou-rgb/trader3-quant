@@ -17,9 +17,6 @@ import logging
 import types
 from datetime import datetime
 
-import pytest
-
-
 # ──────────────────────────────────────────────
 # (1) collector 限速 + 指数退避
 # ──────────────────────────────────────────────
@@ -227,6 +224,7 @@ class TestCalendarNoBasicConfig:
         logging.getLogger().setLevel(logging.WARNING)
 
         import importlib
+
         from trader3.v2 import announcement_calendar as cal_mod
 
         called: dict = {}

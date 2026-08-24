@@ -1,13 +1,15 @@
 """3号交易员 v2.1 — 事前风控规则链测试"""
 import os
 import sys
-import tempfile
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from trader3.v2.risk_rules import (
-    BlacklistRule, PriceBandRule, PositionLimitRule,
-    RiskRuleChain, SingleOrderLimitRule, TimeWindowFlowControlRule,
+    BlacklistRule,
+    PositionLimitRule,
+    PriceBandRule,
+    SingleOrderLimitRule,
+    TimeWindowFlowControlRule,
     build_default_chain,
 )
 

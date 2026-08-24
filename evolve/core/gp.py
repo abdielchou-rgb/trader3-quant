@@ -16,20 +16,18 @@ CPU 友好：纯 numpy 实现，串行评估。
 
 from __future__ import annotations
 
-import math
 import random
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Callable, Dict, List, Optional, Tuple
 
 import numpy as np
-
 
 # ═══════════════════════════════════════════
 # 表达式树
 # ═══════════════════════════════════════════
 
 # 操作符集合: (名称, 元数, 函数)
-OPS: Dict[str, Tuple[int, Callable]] = {
+OPS: dict[str, tuple[int, Callable]] = {
     "add": (2, lambda a, b: a + b),
     "sub": (2, lambda a, b: a - b),
     "mul": (2, lambda a, b: a * b),
@@ -60,8 +58,8 @@ CONSTANTS = [1.0, -1.0, 0.5, 2.0, 5.0, 10.0, 20.0]
 class Node:
     """表达式树节点"""
     op: str                    # 操作符或字段名或常数
-    children: List["Node"] = field(default_factory=list)
-    value: Optional[float] = None   # 常数叶子的值
+    children: list[Node] = field(default_factory=list)
+    value: float | None = None   # 常数叶子的值
 
     def to_str(self) -> str:
         if self.op in FIELDS:
@@ -78,7 +76,7 @@ class Node:
         return f"{self.op}({args})"
 
 
-def _param_value(node: "Node") -> int:
+def _param_value(node: Node) -> int:
     """提取窗口/延迟参数（const 值或退化求值）"""
     if node.op == "const":
         return int(node.value)
@@ -157,7 +155,7 @@ def _ts_corr(a: np.ndarray, b: np.ndarray, w: int) -> np.ndarray:
 # 表达式求值
 # ═══════════════════════════════════════════
 
-def evaluate(node: Node, data: Dict[str, np.ndarray]) -> np.ndarray:
+def evaluate(node: Node, data: dict[str, np.ndarray]) -> np.ndarray:
     """递归求值。data: {field: (T, N) 数组}"""
     op = node.op
     if op in FIELDS:
@@ -182,7 +180,7 @@ def evaluate(node: Node, data: Dict[str, np.ndarray]) -> np.ndarray:
     raise ValueError(f"未知操作符: {op}")
 
 
-def _extract_scalar(node: Node, data: Dict[str, np.ndarray]) -> float:
+def _extract_scalar(node: Node, data: dict[str, np.ndarray]) -> float:
     """提取标量参数（const 节点或常数表达式）"""
     if node.op == "const":
         return float(node.value)
@@ -197,7 +195,7 @@ def _extract_scalar(node: Node, data: Dict[str, np.ndarray]) -> float:
 # 随机生成表达式（ramped half-and-half）
 # ═══════════════════════════════════════════
 
-def random_node(max_depth: int = 4, rng: Optional[random.Random] = None) -> Node:
+def random_node(max_depth: int = 4, rng: random.Random | None = None) -> Node:
     rng = rng or random
     return _random_node(max_depth, rng, 0)
 
@@ -233,7 +231,7 @@ def _fix_constant_args(node: Node, rng: random.Random) -> None:
 # 遗传操作
 # ═══════════════════════════════════════════
 
-def crossover(parent1: Node, parent2: Node, rng: Optional[random.Random] = None) -> Node:
+def crossover(parent1: Node, parent2: Node, rng: random.Random | None = None) -> Node:
     """子树交叉：交换两棵树的随机子树"""
     rng = rng or random
     node1 = _random_subtree(parent1, rng)
@@ -248,7 +246,7 @@ def _random_subtree(node: Node, rng: random.Random) -> Node:
     return rng.choice(nodes)
 
 
-def _collect_nodes(node: Node) -> List[Node]:
+def _collect_nodes(node: Node) -> list[Node]:
     nodes = [node]
     for c in node.children:
         nodes.extend(_collect_nodes(c))
@@ -263,7 +261,7 @@ def _replace_subtree(root: Node, target: Node, replacement: Node, rng: random.Ra
     return new
 
 
-def mutate(node: Node, max_depth: int = 4, rng: Optional[random.Random] = None) -> Node:
+def mutate(node: Node, max_depth: int = 4, rng: random.Random | None = None) -> Node:
     """点变异：随机替换一个子树"""
     rng = rng or random
     target = _random_subtree(node, rng)
@@ -340,10 +338,10 @@ def _try_eval_const(node: Node) -> int:
 
 def compute_fitness(
     expr: str,
-    panel: Dict[str, np.ndarray],
+    panel: dict[str, np.ndarray],
     forward_returns: np.ndarray,
     n_top: int = 5,
-) -> Dict[str, float]:
+) -> dict[str, float]:
     """
     计算因子适应度。
 

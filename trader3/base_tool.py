@@ -7,10 +7,9 @@ from __future__ import annotations
 import time
 import uuid
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, field, asdict
+from dataclasses import asdict, dataclass, field
 from datetime import datetime
-from typing import Any, Dict, List, Optional
-
+from typing import Any
 
 # ═══════════════════════════════════════════
 # 统一返回格式
@@ -40,10 +39,10 @@ class Trader3Response:
     success: bool
     data: Any = None                        # 核心数据
     summary: str = ""                       # 一句话结论（给正文引用）
-    key_metrics: Dict[str, float] = field(default_factory=dict)  # 关键指标（给表格引用）
-    charts: List[ChartSpec] = field(default_factory=list)         # 图表规格（给可视化）
-    caveats: List[str] = field(default_factory=list)              # 局限性/假设（给脚注）
-    metadata: Dict[str, Any] = field(default_factory=dict)        # 运行元信息
+    key_metrics: dict[str, float] = field(default_factory=dict)  # 关键指标（给表格引用）
+    charts: list[ChartSpec] = field(default_factory=list)         # 图表规格（给可视化）
+    caveats: list[str] = field(default_factory=list)              # 局限性/假设（给脚注）
+    metadata: dict[str, Any] = field(default_factory=dict)        # 运行元信息
 
     def to_dict(self) -> dict:
         return {
@@ -57,7 +56,7 @@ class Trader3Response:
         }
 
     @staticmethod
-    def error(message: str, **kwargs) -> "Trader3Response":
+    def error(message: str, **kwargs) -> Trader3Response:
         """构造失败响应"""
         return Trader3Response(success=False, summary=message, **kwargs)
 
@@ -76,7 +75,7 @@ class BaseTool(ABC):
     tool_category: str = ""  # backtest / optimize / execution / signal / valuation
 
     def __init__(self):
-        self._call_history: List[dict] = []
+        self._call_history: list[dict] = []
 
     @abstractmethod
     def execute(self, **kwargs) -> Trader3Response:
@@ -115,5 +114,5 @@ class BaseTool(ABC):
 
         return result
 
-    def get_call_history(self, last_n: int = 10) -> List[dict]:
+    def get_call_history(self, last_n: int = 10) -> list[dict]:
         return self._call_history[-last_n:]

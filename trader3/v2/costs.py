@@ -14,8 +14,7 @@
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Optional
+from dataclasses import dataclass
 
 
 @dataclass(frozen=True)
@@ -55,9 +54,9 @@ DEFAULT_COSTS = CommissionInfo()
 
 
 def build_commission(
-    commission_bp: Optional[float] = None,
-    stamp_tax_bp: Optional[float] = None,
-    slippage_bp: Optional[float] = None,
+    commission_bp: float | None = None,
+    stamp_tax_bp: float | None = None,
+    slippage_bp: float | None = None,
 ) -> CommissionInfo:
     """按需覆盖默认费用；None 保持默认值"""
     return CommissionInfo(

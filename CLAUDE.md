@@ -83,6 +83,11 @@ Standards 轴（风格）与 Spec 轴（需求）分开报告。
 ## 关键命令
 
 ```bash
+# 质量门（提交前必过）
+py -3.11 -m ruff check .
+py -3.11 -m mypy
+py -3.11 -m pytest tests/ -q
+
 # 测试
 py -3.11 -m pytest tests/ -q
 

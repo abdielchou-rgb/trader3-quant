@@ -35,3 +35,28 @@ testpaths = ["tests"]
 
 [tool.setuptools.packages.find]
 include = ["trader3*"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py310"
+extend-exclude = ["temp", "data", "evolve", "scripts", "examples", "shared_state", "trader3.egg-info", "tools/*.py"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP"]
+ignore = ["E501"]
+
+[tool.ruff.lint.per-file-ignores]
+# FastAPI 依赖注入要求 Body()/Header() 出现在参数默认值中，属框架惯用法而非坏味道
+"trader3/api/server.py" = ["B008"]
+
+[tool.mypy]
+python_version = "3.10"
+ignore_missing_imports = true
+check_untyped_defs = false
+follow_imports = "silent"
+exclude = ["tests", "evolve", "scripts"]
+files = [
+    "trader3/data_provider.py",
+    "trader3/models.py",
+    "trader3/shared_state.py",
+]

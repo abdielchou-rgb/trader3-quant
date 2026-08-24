@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """
 fetch_etf_data.py — 拉取主流 A股 ETF 日线数据（akshare）
 
@@ -14,10 +13,8 @@ fetch_etf_data.py — 拉取主流 A股 ETF 日线数据（akshare）
 """
 
 import argparse
-import os
 import time
 from pathlib import Path
-
 
 # 主流 ETF 列表（代码, 名称）
 DEFAULT_ETFS = [

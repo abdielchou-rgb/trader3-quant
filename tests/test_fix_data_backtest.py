@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 审计修复验证（data_provider + backtest）：
 
@@ -8,15 +7,14 @@
 4. test_benchmark_mapping            — 基准代码显式映射（000905 不再被换成沪深300）
 5. test_cache_fingerprint_distinguishes_constraints — 缓存指纹含 constraints/engine_tag
 """
-import sys
-import os
 import json
+import os
+import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import numpy as np
 import pytest
-
 
 # ── 小型 qlib 目录构造工具 ──
 
@@ -230,9 +228,9 @@ def test_benchmark_mapping():
 
 def test_cache_fingerprint_distinguishes_constraints(tmp_path):
     """不同 constraints / engine_tag 不共享缓存；指纹不匹配的缓存文件必须拒绝。"""
-    from trader3.tools.backtest import RunBacktestTool
-    from trader3.models import PortfolioConstraints
     from trader3.base_tool import Trader3Response
+    from trader3.models import PortfolioConstraints
+    from trader3.tools.backtest import RunBacktestTool
 
     tool = RunBacktestTool()
     tool._cache_dir = str(tmp_path / "cache")
@@ -263,7 +261,7 @@ def test_cache_fingerprint_distinguishes_constraints(tmp_path):
     assert tool._load_cache(fp_a) is not None
 
     # 内容合法但存储指纹不匹配 → 拒绝（防跨参数串缓存）
-    payload = json.loads(open(tool._cache_path(fp_a), "r", encoding="utf-8").read())
+    payload = json.loads(open(tool._cache_path(fp_a), encoding="utf-8").read())
     mismatched = tool._cache_path(fp_b)
     with open(mismatched, "w", encoding="utf-8") as f:
         json.dump(payload, f, ensure_ascii=False)

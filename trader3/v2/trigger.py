@@ -18,10 +18,8 @@
 from __future__ import annotations
 
 import logging
-import math
-from dataclasses import dataclass, field, asdict
+from dataclasses import asdict, dataclass, field
 from datetime import datetime
-from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 
@@ -55,7 +53,7 @@ class TriggerResult:
     stop_loss: float = 0.0                # 止损价
     key_technical: str = ""               # 技术确认依据（上破XX位/放量）
     catalyst_note: str = ""               # 催化事件说明
-    caveats: List[str] = field(default_factory=list)   # 风控否决/警示（含负面事件否决）
+    caveats: list[str] = field(default_factory=list)   # 风控否决/警示（含负面事件否决）
     timestamp: str = ""
 
     def to_dict(self) -> dict:
@@ -75,7 +73,7 @@ class NegativeEventRule:
         self.threshold = threshold
         self.enabled = True
 
-    def check(self, **ctx) -> Tuple[bool, str]:
+    def check(self, **ctx) -> tuple[bool, str]:
         action = ctx.get("action", "buy")
         neg = float(ctx.get("negative_event_score", 0) or 0)
         if action == "buy" and neg >= self.threshold:
@@ -117,8 +115,8 @@ class TriggerEngine:
 
     # ── 主入口 ──
 
-    def scan(self, items: List[dict], catalyst_scores: Optional[Dict[str, float]] = None,
-             asof_date: Optional[str] = None, dry_run: bool = False) -> List[TriggerResult]:
+    def scan(self, items: list[dict], catalyst_scores: dict[str, float] | None = None,
+             asof_date: str | None = None, dry_run: bool = False) -> list[TriggerResult]:
         """
         扫描自选股列表，逐只算三因子+风控链，返回触发/未触发结果。
 
@@ -154,8 +152,8 @@ class TriggerEngine:
 
     # ── 单股判定（公共函数：_scan_one 与 daily_pipeline.run_daily 共用） ──
 
-    def _evaluate(self, code: str, catalyst_score: Optional[float] = None,
-                  asof_date: Optional[str] = None, action: str = "buy",
+    def _evaluate(self, code: str, catalyst_score: float | None = None,
+                  asof_date: str | None = None, action: str = "buy",
                   day_orders: int = 0, day_value: float = 0.0,
                   position_pct: float = 0.0, name: str = "") -> TriggerResult:
         """三因子综合判定 + 事前风控链门禁。
@@ -183,7 +181,7 @@ class TriggerEngine:
             and (catalyst >= CATALYST_THRESHOLD or tech_score >= 0.7)  # 催化或技术至少一个强
         )
 
-        caveats: List[str] = []
+        caveats: list[str] = []
         if triggered:
             neg_score, neg_title = self._strongest_negative_event(code)
             chain = build_scan_risk_chain()
@@ -213,12 +211,12 @@ class TriggerEngine:
             timestamp=datetime.now().strftime("%Y-%m-%d %H:%M"),
         )
 
-    def _scan_one(self, code: str, catalyst_score: Optional[float],
-                  asof_date: Optional[str] = None) -> TriggerResult:
+    def _scan_one(self, code: str, catalyst_score: float | None,
+                  asof_date: str | None = None) -> TriggerResult:
         """兼容入口 → 公共判定 _evaluate"""
         return self._evaluate(code, catalyst_score, asof_date=asof_date)
 
-    def _strongest_negative_event(self, code: str, days: int = 7) -> Tuple[float, str]:
+    def _strongest_negative_event(self, code: str, days: int = 7) -> tuple[float, str]:
         """近 days 天最强负面事件的（强度, 标题）；无则 (0.0, "")"""
         try:
             lib = self._event_lib
@@ -249,7 +247,7 @@ class TriggerEngine:
 
     # ── 估值因子 ──
 
-    def _valuation_factor(self, code: str, asof_date: Optional[str] = None) -> Tuple[float, float, float, float]:
+    def _valuation_factor(self, code: str, asof_date: str | None = None) -> tuple[float, float, float, float]:
         """
         估值分位：隐含收益率（估值锚 vs 现价）。
 
@@ -281,7 +279,7 @@ class TriggerEngine:
 
     # ── 技术因子 ──
 
-    def _tech_factor(self, code: str, current_price: float) -> Tuple[float, str]:
+    def _tech_factor(self, code: str, current_price: float) -> tuple[float, str]:
         """
         技术确认：价格上破20日高 + 成交放量（qlib 实时）。
 
@@ -387,8 +385,8 @@ class TriggerEngine:
 
     # ── CLI 便捷 ──
 
-    def scan_watchlist(self, db_path=None, catalyst_scores=None, asof_date: Optional[str] = None,
-                       dry_run: bool = False) -> List[TriggerResult]:
+    def scan_watchlist(self, db_path=None, catalyst_scores=None, asof_date: str | None = None,
+                       dry_run: bool = False) -> list[TriggerResult]:
         """扫描 watchlist 数据库里的全部自选股。
 
         dry_run=True：只报告不改库（不迁移状态、不写触发结果）。

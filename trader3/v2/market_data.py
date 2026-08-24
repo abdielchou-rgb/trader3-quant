@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import Optional, Dict
 
 import requests
 
@@ -46,7 +45,7 @@ def _exchange_prefix(c6: str) -> str:
     return "sz"
 
 
-def em_quote(code: str) -> Optional[Dict]:
+def em_quote(code: str) -> dict | None:
     """
     东财 push2 单股接口。
     返回 {name, total_share, float_share, market_cap, float_market_cap, price, change_pct}
@@ -73,7 +72,7 @@ def em_quote(code: str) -> Optional[Dict]:
         return None
 
 
-def tencent_quote(code: str) -> Optional[Dict]:
+def tencent_quote(code: str) -> dict | None:
     """腾讯实时行情：v_sh600519="1~贵州茅台~600519~现价~昨收~今开~..."""
     c = code.upper().replace(".", "").replace("SH", "sh").replace("SZ", "sz").replace("BJ", "bj")
     if c[:2] not in ("sh", "sz", "bj"):
@@ -110,7 +109,7 @@ def tencent_quote(code: str) -> Optional[Dict]:
         return None
 
 
-def sina_quote(code: str) -> Optional[Dict]:
+def sina_quote(code: str) -> dict | None:
     """新浪实时行情：var hq_str_sh600519="名,今开,昨收,现价,最高,最低,...,量,额" """
     c = code.upper().replace(".", "").replace("SH", "sh").replace("SZ", "sz").replace("BJ", "bj")
     if c[:2] not in ("sh", "sz", "bj"):
@@ -131,7 +130,7 @@ def sina_quote(code: str) -> Optional[Dict]:
         return None
 
 
-def get_quote(code: str) -> Dict:
+def get_quote(code: str) -> dict:
     """
     综合取数（东财优先 → 腾讯 → 新浪）。返回标准化快照。
     """

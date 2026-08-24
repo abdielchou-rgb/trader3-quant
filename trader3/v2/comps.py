@@ -17,10 +17,8 @@
 from __future__ import annotations
 
 import logging
-import math
 import re
-from dataclasses import dataclass, field, asdict
-from typing import Dict, List, Optional
+from dataclasses import asdict, dataclass, field
 
 import numpy as np
 
@@ -69,14 +67,14 @@ class CompsTable:
     target_code: str = ""
     target_name: str = ""
     industry: str = ""
-    peers: List[CompsRow] = field(default_factory=list)
+    peers: list[CompsRow] = field(default_factory=list)
     # 统计基准（四分位）
-    stats: Dict[str, Dict[str, float]] = field(default_factory=dict)  # {metric: {p25,p50,p75,mean,std}}
+    stats: dict[str, dict[str, float]] = field(default_factory=dict)  # {metric: {p25,p50,p75,mean,std}}
     # 异常标红
-    outliers: List[str] = field(default_factory=list)   # [code.metric]
+    outliers: list[str] = field(default_factory=list)   # [code.metric]
     # 结论
     conclusion: str = ""                 # 目标公司溢价/折价
-    caveats: List[str] = field(default_factory=list)
+    caveats: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         return {
@@ -122,8 +120,8 @@ class CompsAnalyzer:
     # ── 主入口 ──
 
     def analyze(self, target_code: str, industry: str = "",
-                peer_codes: Optional[List[str]] = None, n_peers: int = 8,
-                asof_date: Optional[str] = None) -> CompsTable:
+                peer_codes: list[str] | None = None, n_peers: int = 8,
+                asof_date: str | None = None) -> CompsTable:
         """对目标公司做可比分析"""
         # 1. 目标公司财务快照
         target_name, target_fin = self._company_snapshot(target_code, asof_date=asof_date)
@@ -186,7 +184,7 @@ class CompsAnalyzer:
             return "sz" + c
         return c.lower()
 
-    def _company_snapshot(self, code: str, asof_date: Optional[str] = None) -> tuple:
+    def _company_snapshot(self, code: str, asof_date: str | None = None) -> tuple:
         """从 financials.db 读公司财务 + 实时行情/股本/市值（东财→腾讯→新浪）"""
         fin = {}
         if self._fp:
@@ -201,7 +199,6 @@ class CompsAnalyzer:
         from trader3.v2.market_data import get_quote
         q = get_quote(code)
         name = q.get("name", "")
-        price = float(q.get("price") or 0)
         market_cap = float(q.get("market_cap") or 0)
 
         snap = {
@@ -215,7 +212,7 @@ class CompsAnalyzer:
 
     # ── TTM 口径 ──
 
-    def _quarter_history(self, code: str, field: str, n: int = 5) -> List[tuple]:
+    def _quarter_history(self, code: str, field: str, n: int = 5) -> list[tuple]:
         """取利润表字段最近 n 期原始值 [(quarter, value)] 降序。
 
         接缝方法：测试可 monkeypatch 本方法注入已知序列。
@@ -230,23 +227,23 @@ class CompsAnalyzer:
             return []
 
     @staticmethod
-    def _looks_cumulative(pairs: List[tuple]) -> bool:
+    def _looks_cumulative(pairs: list[tuple]) -> bool:
         """年内逐季递增 → 判定为累计值口径（如 Q1<H1<Q3<年报）"""
-        by_year: Dict[str, List[tuple]] = {}
+        by_year: dict[str, list[tuple]] = {}
         for q, v in pairs:
             by_year.setdefault(str(q)[:4], []).append((str(q), float(v)))
         for _, items in by_year.items():
             items.sort()
             vals = [v for _, v in items]
-            if len(vals) >= 2 and all(b > a for a, b in zip(vals, vals[1:])):
+            if len(vals) >= 2 and all(b > a for a, b in zip(vals, vals[1:], strict=False)):
                 return True
         return False
 
     @staticmethod
-    def _cumulative_to_singles(pairs: List[tuple]) -> List[tuple]:
+    def _cumulative_to_singles(pairs: list[tuple]) -> list[tuple]:
         """累计值差额法还原单季值（同年内逐季差分，首期为本身），降序返回"""
         asc = sorted(pairs, key=lambda x: str(x[0]))
-        out: List[tuple] = []
+        out: list[tuple] = []
         prev_q, prev_v = None, None
         for q, v in asc:
             if prev_q is not None and str(prev_q)[:4] == str(q)[:4]:
@@ -256,7 +253,7 @@ class CompsAnalyzer:
             prev_q, prev_v = q, v
         return list(reversed(out))
 
-    def _ttm_financials(self, code: str, max_quarter: Optional[str] = None) -> Dict[str, object]:
+    def _ttm_financials(self, code: str, max_quarter: str | None = None) -> dict[str, object]:
         """最近4个单季 MBRevenue/netProfit/operateProfit 求和为 TTM。
 
         max_quarter：防前视封顶（只使用 <= 该财报期的数据）。
@@ -265,7 +262,7 @@ class CompsAnalyzer:
         """
         fields = {"revenue_ttm": "MBRevenue", "net_profit_ttm": "netProfit",
                   "operate_profit_ttm": "operateProfit"}
-        singles_map: Dict[str, List[float]] = {}
+        singles_map: dict[str, list[float]] = {}
         for key, fld in fields.items():
             pairs = self._quarter_history(code, fld, n=5)
             if max_quarter:
@@ -279,7 +276,7 @@ class CompsAnalyzer:
 
         min_len = min((len(v) for v in singles_map.values()), default=0)
         scale = (4.0 / min_len) if 0 < min_len < 4 else 1.0
-        result: Dict[str, object] = {
+        result: dict[str, object] = {
             key: sum(vals[:min_len]) * scale if min_len else 0.0
             for key, vals in singles_map.items()
         }
@@ -292,7 +289,7 @@ class CompsAnalyzer:
             result["note"] = "无季度财务数据（未验证）"
         return result
 
-    def _balance_latest(self, code: str) -> Dict[str, float]:
+    def _balance_latest(self, code: str) -> dict[str, float]:
         """balance 表最新一期有息负债/现金候选字段；拿不到返回空 dict"""
         if not self._fp:
             return {}
@@ -305,7 +302,7 @@ class CompsAnalyzer:
             return {}
 
     @classmethod
-    def enterprise_value(cls, market_cap: float, bal: Dict[str, float]) -> Optional[float]:
+    def enterprise_value(cls, market_cap: float, bal: dict[str, float]) -> float | None:
         """EV = 市值 + 有息负债 − 现金。有息负债字段全部缺失时返回 None。"""
         debt = sum(bal.get(k, 0) for k in cls.DEBT_KEYS)
         cash = sum(bal.get(k, 0) for k in cls.CASH_KEYS)
@@ -314,7 +311,7 @@ class CompsAnalyzer:
         return None
 
     def _peer_snapshot(self, peer_code: str, target_code: str,
-                       asof_date: Optional[str] = None) -> CompsRow:
+                       asof_date: str | None = None) -> CompsRow:
         """单只可比公司快照（财务统一 TTM 口径；asof 时按可见财报期封顶防前视）"""
         fname, fin = self._company_snapshot(peer_code, asof_date=asof_date)
         mc = float(fin.get("market_cap_cny", 0) or 0)
@@ -350,7 +347,7 @@ class CompsAnalyzer:
             row.pe = mc / np_
         return row
 
-    def _auto_peers(self, target_code: str, industry: str, n: int, asof_date: Optional[str] = None) -> List[CompsRow]:
+    def _auto_peers(self, target_code: str, industry: str, n: int, asof_date: str | None = None) -> list[CompsRow]:
         """自动补可比：用 industry 默认基准构建虚拟可比（诚实标注）"""
         _, tfin = self._company_snapshot(target_code, asof_date=asof_date)
         t_mc = tfin.get("market_cap_cny", 0)
@@ -370,7 +367,7 @@ class CompsAnalyzer:
     # ── 统计 + 离群 ──
 
     @staticmethod
-    def _ebitda_metric_choice(rows: List[CompsRow]) -> tuple:
+    def _ebitda_metric_choice(rows: list[CompsRow]) -> tuple:
         """≥2 家取到真 EV → 用 EV/EBITDA；否则退化 P/EBITDA 并给出 caveat"""
         n_ev = sum(1 for r in rows if getattr(r, "ev_ebitda", 0) > 0)
         if n_ev >= 2:
@@ -379,8 +376,8 @@ class CompsAnalyzer:
                 "有息负债字段缺失，真 EV 不可得，EV/EBITDA 退化为 P/EBITDA"
                 "（市值/营业利润TTM）口径")
 
-    def _compute_stats(self, rows: List[CompsRow],
-                       metrics: Optional[List[str]] = None) -> Dict[str, Dict[str, float]]:
+    def _compute_stats(self, rows: list[CompsRow],
+                       metrics: list[str] | None = None) -> dict[str, dict[str, float]]:
         metrics = metrics or ["pe", "ev_ebitda", "p_ebitda", "ev_revenue"]
         stats = {}
         for metric in metrics:
@@ -399,8 +396,8 @@ class CompsAnalyzer:
                 stats[metric] = {}
         return stats
 
-    def _mark_outliers(self, rows: List[CompsRow], stats,
-                       metrics: Optional[List[str]] = None) -> List[str]:
+    def _mark_outliers(self, rows: list[CompsRow], stats,
+                       metrics: list[str] | None = None) -> list[str]:
         metrics = metrics or ["pe", "ev_ebitda", "p_ebitda", "ev_revenue"]
         outliers = []
         for r in rows:
@@ -416,7 +413,7 @@ class CompsAnalyzer:
         return outliers
 
     def _conclude(self, rows, stats, target_code, industry,
-                  metrics: Optional[List[str]] = None) -> tuple:
+                  metrics: list[str] | None = None) -> tuple:
         """目标 vs 行业中位数 → 溢价/折价结论"""
         metrics = metrics or ["pe", "ev_ebitda", "p_ebitda", "ev_revenue"]
         label_map = {"pe": "P/E", "ev_ebitda": "EV/EBITDA", "p_ebitda": "P/EBITDA",

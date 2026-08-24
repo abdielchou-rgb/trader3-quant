@@ -1,8 +1,11 @@
-"""
+r"""
 P1-② 每日例行任务
 用法：python daily_routine.py [--universe csi300,csi500,csi1000,etf] [--output D:\Marvis\output\]
 """
-import argparse, json, os, sys, subprocess
+import argparse
+import json
+import os
+import subprocess
 from datetime import datetime
 
 PROJECT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
@@ -25,7 +28,7 @@ def run(cmd, desc):
     if result.returncode != 0:
         print(f"  ✗ FAILED: {(result.stderr or result.stdout)[:200]}")
         return False, (result.stderr or result.stdout)[:500]
-    print(f"  ✓ OK")
+    print("  ✓ OK")
     return True, result.stdout[-300:]
 
 def main():
@@ -72,7 +75,7 @@ def main():
     for u in universes:
         f = os.path.join(by_universe, f"{u}_selected.json")
         if os.path.exists(f):
-            with open(f, "r", encoding="utf-8") as fh:
+            with open(f, encoding="utf-8") as fh:
                 data = json.load(fh)
             if not data:
                 continue

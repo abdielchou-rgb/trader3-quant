@@ -6,8 +6,8 @@ import tempfile
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from trader3.v2.trigger import TriggerEngine, TRIGGER_MIN_SCORE
-from trader3.v2.watchlist import get_watchlist, BUY_ZONE, ATTENTION
+from trader3.v2.trigger import TriggerEngine
+from trader3.v2.watchlist import ATTENTION, BUY_ZONE, get_watchlist
 
 
 class TestTriggerEngine:

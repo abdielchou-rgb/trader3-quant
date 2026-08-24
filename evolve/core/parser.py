@@ -14,10 +14,8 @@
 from __future__ import annotations
 
 import re
-from typing import List, Optional
 
-from .gp import FIELDS, CONSTANTS, Node, OPS
-
+from .gp import FIELDS, OPS, Node
 
 _TOKEN_RE = re.compile(r"""
     \s*
@@ -33,7 +31,7 @@ _TOKEN_RE = re.compile(r"""
 """, re.VERBOSE)
 
 
-def _tokenize(s: str) -> List[tuple]:
+def _tokenize(s: str) -> list[tuple]:
     tokens = []
     pos = 0
     while pos < len(s):
@@ -59,7 +57,7 @@ def _tokenize(s: str) -> List[tuple]:
 
 
 class _Parser:
-    def __init__(self, tokens: List[tuple]):
+    def __init__(self, tokens: list[tuple]):
         self.tokens = tokens
         self.pos = 0
 

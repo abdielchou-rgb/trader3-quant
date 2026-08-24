@@ -15,14 +15,11 @@ from __future__ import annotations
 
 import math
 import warnings
-from datetime import datetime
-from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 
 from trader3.base_tool import BaseTool, ChartSpec, Trader3Response
 from trader3.models import RegimeDiagnosis, SignalValidationReport
-
 
 # ═══════════════════════════════════════════
 # Constants
@@ -47,7 +44,7 @@ def _generate_signal_panel(
     n_periods: int = N_PERIODS,
     n_assets: int = N_ASSETS,
     seed: int = SEED_SIGNAL,
-) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
     Generate synthetic panel data for signal validation.
 
@@ -109,7 +106,7 @@ def _generate_signal_panel(
 def _generate_market_regime_data(
     lookback: int = 60,
     seed: int = SEED_REGIME,
-) -> Dict[str, np.ndarray]:
+) -> dict[str, np.ndarray]:
     """
     Generate synthetic market data for regime detection.
 
@@ -189,7 +186,7 @@ def _compute_ic_series(signal: np.ndarray, forward_returns: np.ndarray) -> np.nd
     return ic_values
 
 
-def _compute_ic_stats(ic_series: np.ndarray) -> Tuple[float, float, float]:
+def _compute_ic_stats(ic_series: np.ndarray) -> tuple[float, float, float]:
     """Mean IC, IC std, ICIR."""
     mean_ic = float(np.mean(ic_series))
     std_ic = float(np.std(ic_series, ddof=1))
@@ -204,7 +201,7 @@ def _compute_ic_stats(ic_series: np.ndarray) -> Tuple[float, float, float]:
 
 def _compute_group_returns(
     signal: np.ndarray, forward_returns: np.ndarray
-) -> Tuple[Dict[str, float], float, float, float]:
+) -> tuple[dict[str, float], float, float, float]:
     """
     Rank assets by signal -> 5 quintiles -> compute forward returns.
 
@@ -303,7 +300,6 @@ def _compute_crowding_index(signal: np.ndarray) -> float:
         return 0.0
 
     rng = np.random.default_rng(SEED_SIGNAL + 1)
-    cols = list(range(n_assets))
     pairs = set()
     max_pairs = 60
     while len(pairs) < min(max_pairs, n_assets * (n_assets - 1) // 2):
@@ -336,7 +332,7 @@ def _compute_conditional_validity(
     signal: np.ndarray,
     forward_returns: np.ndarray,
     market_returns: np.ndarray,
-) -> Dict[str, float]:
+) -> dict[str, float]:
     """
     Split data by market volatility regime and compute IC within each.
 
@@ -403,10 +399,10 @@ class _CustomGaussianHMM:
         self.n_iter = n_iter
         self.tol = tol
 
-        self.transmat_: Optional[np.ndarray] = None
-        self.startprob_: Optional[np.ndarray] = None
-        self.means_: Optional[np.ndarray] = None
-        self.covars_: Optional[np.ndarray] = None
+        self.transmat_: np.ndarray | None = None
+        self.startprob_: np.ndarray | None = None
+        self.means_: np.ndarray | None = None
+        self.covars_: np.ndarray | None = None
 
     def _initialize(self, X: np.ndarray) -> None:
         """Initialize parameters via stratified sampling."""
@@ -432,7 +428,7 @@ class _CustomGaussianHMM:
 
     def _e_step(
         self, X: np.ndarray
-    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """Forward-Backward algorithm."""
         from scipy.stats import multivariate_normal
 
@@ -496,7 +492,6 @@ class _CustomGaussianHMM:
 
     def _m_step(self, X: np.ndarray, gamma: np.ndarray, xi: np.ndarray) -> None:
         """M-step: re-estimate parameters."""
-        n_samples = X.shape[0]
 
         # Start probabilities
         self.startprob_ = gamma[0]
@@ -538,7 +533,7 @@ class _CustomGaussianHMM:
         self._initialize(X)
 
         prev_ll = -np.inf
-        for iteration in range(self.n_iter):
+        for _iteration in range(self.n_iter):
             gamma, xi, emission = self._e_step(X)
             self._m_step(X, gamma, xi)
 
@@ -582,7 +577,7 @@ def _causal_zscore(a: np.ndarray) -> np.ndarray:
     return out
 
 
-def _fit_hmm(data: Dict[str, np.ndarray]) -> Tuple[str, Dict[str, float], float]:
+def _fit_hmm(data: dict[str, np.ndarray]) -> tuple[str, dict[str, float], float]:
     """
     Fit HMM to market data and extract regime probabilities.
 
@@ -595,7 +590,6 @@ def _fit_hmm(data: Dict[str, np.ndarray]) -> Tuple[str, Dict[str, float], float]
     regime_entropy : float
     """
     returns = data["returns"]
-    prices = data["prices"]
     volumes = data.get("volumes")
     volumes_real = bool(data.get("volumes_real", False))
     T = len(returns)
@@ -713,8 +707,8 @@ def _fit_hmm(data: Dict[str, np.ndarray]) -> Tuple[str, Dict[str, float], float]
 
 
 def _rule_based_regime(
-    data: Dict[str, np.ndarray],
-) -> Tuple[str, Dict[str, float], float]:
+    data: dict[str, np.ndarray],
+) -> tuple[str, dict[str, float], float]:
     """
     Rule-based market regime detection using simple MA and volatility thresholds.
 
@@ -732,7 +726,6 @@ def _rule_based_regime(
     # Moving averages
     ma_20 = np.mean(prices[-20:])
     ma_60 = np.mean(prices[-60:]) if T >= 60 else np.mean(prices)
-    current_price = prices[-1]
 
     # Rolling volatility
     rolling_vol = np.std(returns[-20:]) * math.sqrt(TRADING_DAYS)
@@ -797,7 +790,7 @@ def _rule_based_regime(
 # ═══════════════════════════════════════════
 
 
-def _compute_key_indicators(data: Dict[str, np.ndarray]) -> Dict[str, float]:
+def _compute_key_indicators(data: dict[str, np.ndarray]) -> dict[str, float]:
     """
     从真实行情数据提取关键指标。
 
@@ -807,7 +800,7 @@ def _compute_key_indicators(data: Dict[str, np.ndarray]) -> Dict[str, float]:
     volumes = data.get("volumes")
     volumes_real = bool(data.get("volumes_real", False))
 
-    indicators: Dict[str, float] = {}
+    indicators: dict[str, float] = {}
     volatility = float(np.std(returns[-20:]) * math.sqrt(TRADING_DAYS) * 100)
     indicators["20日年化波动率(%)"] = round(volatility, 1)
     indicators["近20日上涨日占比"] = round(float(np.mean(returns[-20:] > 0)), 2)
@@ -821,7 +814,7 @@ def _compute_key_indicators(data: Dict[str, np.ndarray]) -> Dict[str, float]:
 
 def _find_historical_analog(
     current_regime: str,
-    regime_probs: Dict[str, float],
+    regime_probs: dict[str, float],
 ) -> str:
     """Find historical period with most similar regime pattern."""
     analogs = {
@@ -843,8 +836,8 @@ def _find_historical_analog(
 
 def _generate_strategy_suggestion(
     current_regime: str,
-    regime_probs: Dict[str, float],
-) -> Tuple[str, float]:
+    regime_probs: dict[str, float],
+) -> tuple[str, float]:
     """
     Generate position sizing and style suggestion based on regime.
 
@@ -904,9 +897,9 @@ class ValidateSignalTool(BaseTool):
     def execute(
         self,
         signal_name: str = "",
-        signal_values: Optional[List[float]] = None,
-        forward_returns: Optional[Dict[int, List[float]]] = None,
-        horizons: Optional[List[int]] = None,
+        signal_values: list[float] | None = None,
+        forward_returns: dict[int, list[float]] | None = None,
+        horizons: list[int] | None = None,
     ) -> Trader3Response:
         """
         Validate a signal's predictive power.
@@ -1054,7 +1047,7 @@ class ValidateSignalTool(BaseTool):
                     continue
                 dmap = {
                     d: float(v)
-                    for d, v in zip(dates, close)
+                    for d, v in zip(dates, close, strict=False)
                     if v is not None and np.isfinite(v) and v > 0
                 }
                 if len(dmap) >= n_periods + 21:
@@ -1076,7 +1069,7 @@ class ValidateSignalTool(BaseTool):
             sig_2d = np.zeros((n_periods, len(series)), dtype=np.float64)
             fr_2d = np.zeros((n_periods, len(series)), dtype=np.float64)
 
-            for j, (code, dmap) in enumerate(series.items()):
+            for j, (_code, dmap) in enumerate(series.items()):
                 recent = np.array([dmap[d] for d in window], dtype=np.float64)
                 # 动量: log(c_t / c_{t-20})
                 mom = np.log(recent[21:] / recent[:-21])
@@ -1119,8 +1112,8 @@ class DiagnoseMarketRegimeTool(BaseTool):
     def execute(
         self,
         lookback: int = 60,
-        prices: Optional[List[float]] = None,
-        volumes: Optional[List[float]] = None,
+        prices: list[float] | None = None,
+        volumes: list[float] | None = None,
     ) -> Trader3Response:
         """
         Diagnose current market regime.
@@ -1263,7 +1256,7 @@ class DiagnoseMarketRegimeTool(BaseTool):
             volumes_real = False
             try:
                 vol, vol_dates = dp.load_stock("SH000300", "volume")
-                vmap = {d: float(v) for d, v in zip(vol_dates, vol)
+                vmap = {d: float(v) for d, v in zip(vol_dates, vol, strict=False)
                         if v is not None and np.isfinite(v) and v > 0}
                 aligned = [vmap.get(d) for d in dates_valid]
                 if sum(v is not None for v in aligned[-100:]) >= 95:

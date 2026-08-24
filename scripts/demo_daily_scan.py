@@ -1,12 +1,14 @@
 """3号交易员 v2.0 — 端到端演示（采集+触发）"""
-import sys, os
+import os
+import sys
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 os.environ['AKSHARE_NO_PROXY'] = '1'
 
 from trader3.v2.collector import DataCollector
+from trader3.v2.events import get_event_library
 from trader3.v2.trigger import get_trigger_engine
 from trader3.v2.watchlist import get_watchlist
-from trader3.v2.events import get_event_library
 
 # 1. 重建自选股
 wl = get_watchlist()

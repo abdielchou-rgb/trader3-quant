@@ -9,17 +9,14 @@ from __future__ import annotations
 
 import json
 import logging
-import math
 import os
 import random
 import time
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 
 from .gp import Node, compute_fitness, crossover, mutate, normalize, random_node
-from .parser import parse_expr
 
 logger = logging.getLogger("evolve")
 
@@ -51,13 +48,13 @@ class EvolutionEngine:
         os.makedirs(self.log_dir, exist_ok=True)
 
         self.rng = random.Random(seed)
-        self.population: List[Node] = []
-        self.fitness_history: List[float] = []
-        self.best_history: List[dict] = []
+        self.population: list[Node] = []
+        self.fitness_history: list[float] = []
+        self.best_history: list[dict] = []
 
     # ── 初始化种群 ──
 
-    def init_population(self) -> List[Node]:
+    def init_population(self) -> list[Node]:
         self.population = [random_node(self.max_depth, self.rng) for _ in range(self.population_size)]
         return self.population
 
@@ -65,11 +62,11 @@ class EvolutionEngine:
 
     def evolve(
         self,
-        panel: Dict[str, np.ndarray],
+        panel: dict[str, np.ndarray],
         forward_returns: np.ndarray,
-        generations: Optional[int] = None,
-        progress_cb: Optional[callable] = None,
-    ) -> Tuple[Node, dict]:
+        generations: int | None = None,
+        progress_cb: callable | None = None,
+    ) -> tuple[Node, dict]:
         """
         运行进化。
 
@@ -138,14 +135,14 @@ class EvolutionEngine:
     def _fitness_for(self, node: Node, panel, fwd) -> dict:
         return compute_fitness(node, panel, fwd)
 
-    def _evaluate_population(self, panel, fwd) -> Dict[int, dict]:
+    def _evaluate_population(self, panel, fwd) -> dict[int, dict]:
         """评估整个种群（串行；panel 较大时进程间复制开销高于计算本身）"""
         if self.n_workers > 1:
             logger.info("当前版本为串行评估，n_workers=%s 被忽略", self.n_workers)
         return {i: compute_fitness(self.population[i], panel, fwd)
                 for i in range(len(self.population))}
 
-    def _next_generation(self, fitness_map: Dict[int, dict]) -> None:
+    def _next_generation(self, fitness_map: dict[int, dict]) -> None:
         """选择 + 交叉 + 变异 → 下一代种群"""
         # 按 fitness 排序
         ranked = sorted(fitness_map.items(), key=lambda kv: kv[1].get("fitness", -999), reverse=True)

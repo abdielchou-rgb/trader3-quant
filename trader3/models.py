@@ -4,10 +4,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field, asdict
-from datetime import datetime
-from typing import Any, Dict, List, Optional
-
+from dataclasses import asdict, dataclass, field
+from typing import Any
 
 # ═══════════════════════════════════════════
 # 策略/配置类
@@ -19,8 +17,8 @@ class FactorConfig:
     weight: float = 0.0
     direction: str = "long"          # long / short / overlay
     type: str = ""                   # 因子类型标记（如 overlay）
-    neutralize: List[str] = field(default_factory=list)  # ["industry", "size", ...]
-    params: Dict[str, Any] = field(default_factory=dict)
+    neutralize: list[str] = field(default_factory=list)  # ["industry", "size", ...]
+    params: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -28,12 +26,12 @@ class StrategyConfig:
     """策略定义"""
     name: str = ""
     version: str = "0.1.0"
-    factors: List[FactorConfig] = field(default_factory=list)
-    universe: Dict[str, Any] = field(default_factory=dict)
+    factors: list[FactorConfig] = field(default_factory=list)
+    universe: dict[str, Any] = field(default_factory=dict)
     constraints_path: str = ""
-    risk_model: Dict[str, Any] = field(default_factory=dict)
-    optimizer: Dict[str, Any] = field(default_factory=dict)
-    params: Dict[str, Any] = field(default_factory=dict)
+    risk_model: dict[str, Any] = field(default_factory=dict)
+    optimizer: dict[str, Any] = field(default_factory=dict)
+    params: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -89,11 +87,11 @@ class BacktestReport:
     avg_holding_period: float = 0.0
 
     # 归因
-    brinson_allocation: Dict[str, float] = field(default_factory=dict)
-    barra_exposure: Dict[str, float] = field(default_factory=dict)
+    # 伪归因字段(brinson_allocation/barra_exposure)已于 post-audit-4 移除——
+    # 无行业分类与因子库支撑前不得输出伪造归因
 
     # 分段表现
-    period_returns: Dict[str, float] = field(default_factory=dict)  # {"trending_up": 0.25, ...}
+    period_returns: dict[str, float] = field(default_factory=dict)  # {"trending_up": 0.25, ...}
 
     # 统计检验
     t_statistic: float = 0.0
@@ -101,7 +99,7 @@ class BacktestReport:
     information_ratio: float = 0.0
 
     # 序列
-    equity_curve: List[float] = field(default_factory=list)
+    equity_curve: list[float] = field(default_factory=list)
 
 
 @dataclass
@@ -119,20 +117,20 @@ class WFAReport:
     parameter_stability: float = 0.0     # 参数稳定性（1 为完全稳定）
     overfitting_probability: float = 0.0 # 过拟合概率
 
-    window_results: List[dict] = field(default_factory=list)
+    window_results: list[dict] = field(default_factory=list)
 
 
 @dataclass
 class OptimizationResult:
     """组合优化结果"""
-    target_weights: Dict[str, float] = field(default_factory=dict)
+    target_weights: dict[str, float] = field(default_factory=dict)
     expected_return: float = 0.0
     expected_risk: float = 0.0
     expected_sharpe: float = 0.0
-    factor_exposure: Dict[str, float] = field(default_factory=dict)
+    factor_exposure: dict[str, float] = field(default_factory=dict)
     turnover_cost_bp: float = 0.0
     constraints_satisfied: bool = True
-    constraint_violations: List[str] = field(default_factory=list)
+    constraint_violations: list[str] = field(default_factory=list)
     max_single_weight_cap: float = 0.0  # 单票权重上限（供门禁独立复检；0=未提供）
 
 
@@ -147,7 +145,7 @@ class TCAEstimate:
     opportunity_cost_bp: float = 0.0
     total_cost_cny: float = 0.0
     recommended_urgency: str = "normal"
-    execution_suggestions: List[str] = field(default_factory=list)
+    execution_suggestions: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -156,11 +154,11 @@ class ExecutionPlan:
     algorithm: str = "adaptive_vwap"
     urgency: str = "normal"
 
-    slices: List[dict] = field(default_factory=list)  # [{time: "09:35", symbol: "...", quantity: ..., price_limit: ...}]
+    slices: list[dict] = field(default_factory=list)  # [{time: "09:35", symbol: "...", quantity: ..., price_limit: ...}]
     expected_completion_rate: float = 0.0
     expected_total_cost_bp: float = 0.0
 
-    risk_limits: Dict[str, float] = field(default_factory=dict)  # {"max_price_deviation": 0.02, ...}
+    risk_limits: dict[str, float] = field(default_factory=dict)  # {"max_price_deviation": 0.02, ...}
 
 
 @dataclass
@@ -171,16 +169,16 @@ class SignalValidationReport:
     ic_mean: float = 0.0
     ic_std: float = 0.0
     icir: float = 0.0
-    ic_series: List[float] = field(default_factory=list)
+    ic_series: list[float] = field(default_factory=list)
 
-    group_returns: Dict[str, float] = field(default_factory=dict)  # {"Q1": 0.05, "Q5": -0.03}
+    group_returns: dict[str, float] = field(default_factory=dict)  # {"Q1": 0.05, "Q5": -0.03}
     monotonicity: float = 0.0
 
     half_life_periods: float = 0.0  # 半衰期（交易日），自相关衰减法
     half_life_months: float = 0.0   # 已弃用，兼容旧字段（= periods/21）
     crowding_index: float = 0.0     # 拥挤度代理：信号截面平均|成对相关|
 
-    conditional_validity: Dict[str, float] = field(default_factory=dict)  # {"low_vol": 0.12, "high_vol": 0.01}
+    conditional_validity: dict[str, float] = field(default_factory=dict)  # {"low_vol": 0.12, "high_vol": 0.01}
 
     long_short_return: float = 0.0
     long_only_return: float = 0.0
@@ -190,10 +188,10 @@ class SignalValidationReport:
 class RegimeDiagnosis:
     """市场状态诊断"""
     current_regime: str = ""         # trending_up / ranging / bearish / high_vol / liquidity_crisis
-    regime_probabilities: Dict[str, float] = field(default_factory=dict)  # {regime: prob, ...}
+    regime_probabilities: dict[str, float] = field(default_factory=dict)  # {regime: prob, ...}
     regime_entropy: float = 0.0      # 不确定性（越低越明确）
 
-    key_indicators: Dict[str, float] = field(default_factory=dict)  # {indicator: value}
+    key_indicators: dict[str, float] = field(default_factory=dict)  # {indicator: value}
     historical_analog: str = ""       # 历史类比期
 
     strategy_suggestion: str = ""     # 策略建议（仓位/风格/信号权重倾向）
@@ -204,7 +202,7 @@ class RegimeDiagnosis:
 class ValuationReport:
     """估值报告"""
     code: str = ""
-    methods: Dict[str, dict] = field(default_factory=dict)  # {"dcf": {target, base_assumptions}, ...}
+    methods: dict[str, dict] = field(default_factory=dict)  # {"dcf": {target, base_assumptions}, ...}
 
     fair_value_base: float = 0.0
     fair_value_bull: float = 0.0
@@ -214,8 +212,8 @@ class ValuationReport:
     implied_return: float = 0.0       # 隐含收益率
     upside_probability: float = 0.0   # 上行概率
 
-    key_assumptions: Dict[str, Any] = field(default_factory=dict)
-    sensitivity: Dict[str, List[float]] = field(default_factory=dict)  # 敏感性分析
+    key_assumptions: dict[str, Any] = field(default_factory=dict)
+    sensitivity: dict[str, list[float]] = field(default_factory=dict)  # 敏感性分析
 
 
 @dataclass
@@ -224,12 +222,12 @@ class ScorecardReport:
     template: str = "quality_growth"  # quality_growth / value / turnaround
 
     overall_score: float = 0.0
-    dimension_scores: Dict[str, float] = field(default_factory=dict)  # {"quality": 7.5, ...}
-    peer_comparison: Dict[str, float] = field(default_factory=dict)
+    dimension_scores: dict[str, float] = field(default_factory=dict)  # {"quality": 7.5, ...}
+    peer_comparison: dict[str, float] = field(default_factory=dict)
 
-    red_flags: List[str] = field(default_factory=list)
-    key_positives: List[str] = field(default_factory=list)
-    key_concerns: List[str] = field(default_factory=list)
+    red_flags: list[str] = field(default_factory=list)
+    key_positives: list[str] = field(default_factory=list)
+    key_concerns: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -240,11 +238,11 @@ class PrivateCompanyBridge:
     estimated_revenue: float = 0.0           # 推算收入（亿元）
     ps_multiple: float = 0.0                 # 行业适用PS倍数
     ps_based_valuation: float = 0.0          # 收入×PS倍数
-    comparable_companies: List[dict] = field(default_factory=list)  # [{name, pe, ps, ev_ebitda, liquidity_discount_adjusted}]
+    comparable_companies: list[dict] = field(default_factory=list)  # [{name, pe, ps, ev_ebitda, liquidity_discount_adjusted}]
     median_comparable_pe: float = 0.0
     median_comparable_ps: float = 0.0
     liquidity_discount: float = 0.30         # 流动性折价（25-35%）
     comp_based_valuation: float = 0.0        # 可比公司法估值（含流动性折价）
-    fair_value_range: List[float] = field(default_factory=list)  # [保守, 合理, 乐观]
-    key_assumptions: List[str] = field(default_factory=list)
-    caveats: List[str] = field(default_factory=list)
+    fair_value_range: list[float] = field(default_factory=list)  # [保守, 合理, 乐观]
+    key_assumptions: list[str] = field(default_factory=list)
+    caveats: list[str] = field(default_factory=list)

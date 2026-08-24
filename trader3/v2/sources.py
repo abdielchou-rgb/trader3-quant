@@ -19,10 +19,8 @@ from __future__ import annotations
 
 import logging
 import re
-import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
-from typing import Dict, List, Optional
 
 logger = logging.getLogger("trader3.v2.sources")
 
@@ -48,7 +46,7 @@ class BaseSource:
     source_name: str = ""
     availability: str = "local"   # sandbox / local / manual
 
-    def fetch(self, keywords: str, limit: int = 10) -> List[SourceItem]:
+    def fetch(self, keywords: str, limit: int = 10) -> list[SourceItem]:
         raise NotImplementedError
 
 
@@ -65,11 +63,11 @@ class SinaNewsSource(BaseSource):
     def __init__(self, http=None):
         self._http = http
 
-    def fetch(self, keywords: str = "", limit: int = 10) -> List[SourceItem]:
+    def fetch(self, keywords: str = "", limit: int = 10) -> list[SourceItem]:
         import requests
         # 新浪财经滚动要闻：pageid=153 lid=2516 是国内财经
-        url = ("https://feed.mix.sina.com.cn/api/roll/get?pageid=153&lid=2516"
-               "&k=&num=%d&page=1" % (limit + 5))
+        url = (f"https://feed.mix.sina.com.cn/api/roll/get?pageid=153&lid=2516"
+               f"&k=&num={limit + 5}&page=1")
         r = (self._http or requests).get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
         data = r.json().get("result", {}) or {}
         items = []
@@ -97,7 +95,7 @@ class EastmoneyAnnouncementSource(BaseSource):
     def __init__(self, http=None):
         self._http = http
 
-    def fetch(self, code: str, limit: int = 10) -> List[SourceItem]:
+    def fetch(self, code: str, limit: int = 10) -> list[SourceItem]:
         import requests
         url = ("https://np-anotice-stock.eastmoney.com/api/security/ann"
                f"?sr=-1&page_size={limit}&page_index=1&ann_type=A&client_source=web&stock_list={code}")
@@ -110,8 +108,7 @@ class EastmoneyAnnouncementSource(BaseSource):
                 continue
             items.append(SourceItem(
                 title=title[:200], content="", source_name=self.source_name,
-                url="https://data.eastmoney.com/notices/detail/%s/%s.html" % (
-                    code, item.get("art_code", "")),
+                url=f"https://data.eastmoney.com/notices/detail/{code}/{item.get('art_code', '')}.html",
                 ts=(item.get("notice_date") or "")[:10],
             ))
         return items
@@ -123,7 +120,7 @@ class EastmoneyZTPoolSource(BaseSource):
     source_name = "zt_pool"
     availability = "sandbox"
 
-    def fetch(self, keywords: str = "", limit: int = 30) -> List[SourceItem]:
+    def fetch(self, keywords: str = "", limit: int = 30) -> list[SourceItem]:
         import requests
         today = datetime.now().strftime("%Y%m%d")
         url = ("https://push2ex.eastmoney.com/getTopicZTPool?"
@@ -150,7 +147,7 @@ class SinaQuoteSource(BaseSource):
     source_name = "sina_quote"
     availability = "sandbox"
 
-    def fetch(self, codes: List[str], limit: int = 10) -> List[SourceItem]:
+    def fetch(self, codes: list[str], limit: int = 10) -> list[SourceItem]:
         import requests
         if isinstance(codes, str):
             codes = [codes]
@@ -227,7 +224,7 @@ class XueqiuSource(BaseSource):
     source_name = "xueqiu"
     availability = "local"
 
-    def fetch(self, keywords: str = "", limit: int = 10) -> List[SourceItem]:
+    def fetch(self, keywords: str = "", limit: int = 10) -> list[SourceItem]:
         cookie = _get_cookie("XUEQIU_COOKIE")
         if not cookie:
             logger.warning("[sources] 雪球需 XUEQIU_COOKIE 环境变量（本机浏览器复制）。"
@@ -253,7 +250,7 @@ class XueqiuSource(BaseSource):
         # 若搜索无结果，退热帖热榜（免搜索接口）
         if not items:
             try:
-                url = "https://xueqiu.com/statuses/hot/listV2.json?since_id=-1&max_id=-1&size=%d" % limit
+                url = f"https://xueqiu.com/statuses/hot/listV2.json?since_id=-1&max_id=-1&size={limit}"
                 r = _fetch_url(url, cookie=cookie, referer="https://xueqiu.com/")
                 data = r.json() or {}
                 for item in (data.get("items") or [])[:limit]:
@@ -278,7 +275,7 @@ class ZhihuSource(BaseSource):
     source_name = "zhihu"
     availability = "local"
 
-    def fetch(self, keywords: str = "", limit: int = 10) -> List[SourceItem]:
+    def fetch(self, keywords: str = "", limit: int = 10) -> list[SourceItem]:
         token = _get_cookie("ZHIHU_TOKEN")
         items = []
         # 1. 有 token → 知乎热榜真实接口
@@ -329,7 +326,7 @@ class GlobalReutersSource(BaseSource):
         "https://feeds.content.dowjones.io/public/rss/mw_topstories",  # MarketWatch
     ]
 
-    def fetch(self, keywords: str = "", limit: int = 10) -> List[SourceItem]:
+    def fetch(self, keywords: str = "", limit: int = 10) -> list[SourceItem]:
         items = []
         import xml.etree.ElementTree as ET
         for feed_url in self.RSS_FEEDS:
@@ -373,7 +370,7 @@ class GlobalReutersSource(BaseSource):
 # 注册表
 # ──────────────────────────────────────────────
 
-ALL_SOURCES: List[BaseSource] = [
+ALL_SOURCES: list[BaseSource] = [
     SinaNewsSource(),
     EastmoneyAnnouncementSource(),
     EastmoneyZTPoolSource(),
@@ -384,7 +381,7 @@ ALL_SOURCES: List[BaseSource] = [
 ]
 
 
-def get_sources(level: str = "all") -> List[BaseSource]:
+def get_sources(level: str = "all") -> list[BaseSource]:
     """按通道级别取源。level: all / sandbox / local"""
     if level == "sandbox":
         return [s for s in ALL_SOURCES if s.availability == "sandbox"]
@@ -393,6 +390,6 @@ def get_sources(level: str = "all") -> List[BaseSource]:
     return ALL_SOURCES
 
 
-def source_status() -> List[dict]:
+def source_status() -> list[dict]:
     """源可用性概览（供文档/UI）"""
     return [{"name": s.source_name, "availability": s.availability} for s in ALL_SOURCES]

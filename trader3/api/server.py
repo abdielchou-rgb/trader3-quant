@@ -7,7 +7,9 @@
 安全:
   - 默认仅绑定 127.0.0.1；需要局域网访问时必须设置 TRADER3_API_KEY
   - 设置 TRADER3_API_KEY 后所有 Tool 端点要求请求头 X-API-Key 匹配
-  - payload 键透传给 Tool（未知键由 BaseTool 统一报错），不执行任何动态求值
+  - payload 经 pydantic 白名单校验（extra=forbid，未知字段/越界数值 → 422），
+    仅声明的字段以 model_dump(exclude_unset=True) 透传给 Tool（未传即用工具默认），
+    不执行任何动态求值
 
 端点:
   POST /backtest           → run_backtest
@@ -30,10 +32,11 @@
 from __future__ import annotations
 
 import os
-from typing import Any, Dict, Optional
+from typing import Any
 
 from fastapi import Body, FastAPI, Header, HTTPException
 from fastapi.encoders import jsonable_encoder
+from pydantic import BaseModel, ConfigDict, Field
 
 from trader3 import Trader3
 
@@ -41,7 +44,7 @@ from trader3 import Trader3
 _t3: Trader3 = None
 
 # API Key：环境变量 TRADER3_API_KEY 设置后强制鉴权
-_API_KEY: Optional[str] = os.environ.get("TRADER3_API_KEY") or None
+_API_KEY: str | None = os.environ.get("TRADER3_API_KEY") or None
 
 
 def get_trader3() -> Trader3:
@@ -52,7 +55,7 @@ def get_trader3() -> Trader3:
     return _t3
 
 
-def _require_api_key(x_api_key: Optional[str]) -> None:
+def _require_api_key(x_api_key: str | None) -> None:
     """配置了 TRADER3_API_KEY 时校验请求头 X-API-Key。"""
     if _API_KEY and x_api_key != _API_KEY:
         raise HTTPException(status_code=401, detail="Invalid or missing X-API-Key")
@@ -69,7 +72,7 @@ app = FastAPI(
 # 辅助
 # ═══════════════════════════════════════════
 
-def _run_tool(method_name: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+def _run_tool(method_name: str, payload: dict[str, Any]) -> dict[str, Any]:
     """调用 Tool 并返回可 JSON 序列化的 Trader3Response.to_dict()"""
     t3 = get_trader3()
     method = getattr(t3, method_name)
@@ -79,78 +82,207 @@ def _run_tool(method_name: str, payload: Dict[str, Any]) -> Dict[str, Any]:
 
 
 # ═══════════════════════════════════════════
+# 请求白名单模型（字段与各 Tool execute 签名严格对齐）
+# ═══════════════════════════════════════════
+
+
+class BacktestPayload(BaseModel):
+    """POST /backtest ← RunBacktestTool.execute"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    strategy_config: dict[str, Any] | None = None
+    universe: list[str] | None = None
+    start_date: str = "2020-01-01"
+    end_date: str = "2025-12-31"
+    constraints: dict[str, Any] | None = None
+    benchmark: str = "000300.SH"
+    commission: dict[str, Any] | None = None
+    signal_expr: str = ""
+    factor_from_selected: int = Field(default=0, ge=0)
+
+
+class WfaPayload(BaseModel):
+    """POST /wfa ← WalkForwardAnalysisTool.execute"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    strategy_config: dict[str, Any] | None = None
+    train_window: int = Field(default=252, gt=10)
+    test_window: int = Field(default=63, gt=10)
+    step: int | None = None
+
+
+class OptimizePayload(BaseModel):
+    """POST /optimize ← OptimizePortfolioTool.execute"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    signals: dict[str, float]
+    method: str = "risk_budget"
+    constraints: dict[str, Any] | None = None
+    risk_model: dict[str, Any] | None = None
+
+
+class RegimeAllocatePayload(BaseModel):
+    """POST /regime_allocate ← RegimeAwareAllocationTool.execute"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    signals: dict[str, float]
+    regime_probs: dict[str, float] | None = None
+    regime_weights: dict[str, dict[str, float]] | None = None
+    constraints: dict[str, Any] | None = None
+
+
+class EstimateCostPayload(BaseModel):
+    """POST /estimate_cost ← EstimateTransactionCostTool.execute"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    orders: list[dict[str, Any]] | None = None
+    method: str = "implementation_shortfall"
+    market_data: dict[str, Any] | None = None
+
+
+class ExecutionPlanPayload(BaseModel):
+    """POST /execution_plan ← GenerateExecutionPlanTool.execute"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    target_weights: dict[str, float] | None = None
+    current_weights: dict[str, float] | None = None
+    algorithm: str = "adaptive_vwap"
+    urgency: str = "normal"
+    portfolio_value: float = Field(default=10_000_000.0, gt=0)
+    market_data: dict[str, Any] | None = None
+
+
+class ValidateSignalPayload(BaseModel):
+    """POST /validate_signal ← ValidateSignalTool.execute"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    signal_name: str = ""
+    signal_values: list[float] | None = None
+    forward_returns: dict[int, list[float]] | None = None
+    horizons: list[int] | None = None
+
+
+class RegimePayload(BaseModel):
+    """POST /regime ← DiagnoseMarketRegimeTool.execute（允许空请求体）"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    lookback: int = 60
+    prices: list[float] | None = None
+    volumes: list[float] | None = None
+
+
+class ValuationPayload(BaseModel):
+    """POST /valuation ← ValuationAnchorTool.execute"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    codes: list[str] | None = None
+    methods: list[str] | None = None
+    scenarios: dict[str, Any] | None = None
+    financials: dict[str, Any] | None = None
+    peers: list[dict[str, Any]] | None = None
+    private_company: dict[str, Any] | None = None
+    current_price: float | None = None
+    asof_date: str | None = None
+
+
+class ScorecardPayload(BaseModel):
+    """POST /scorecard ← FundamentalScorecardTool.execute"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    codes: list[str] | None = None
+    template: str = "quality_growth"
+    financials: dict[str, Any] | None = None
+    peers: list[dict[str, Any]] | None = None
+    management_score: float | None = None
+    moat_score: float | None = None
+
+
+# ═══════════════════════════════════════════
 # 10 个 Tool 端点
 # ═══════════════════════════════════════════
 
 
 @app.post("/backtest")
-def api_backtest(payload: Dict[str, Any] = Body(default={}), x_api_key: Optional[str] = Header(default=None)) -> Dict[str, Any]:
+def api_backtest(payload: BacktestPayload, x_api_key: str | None = Header(default=None)) -> dict[str, Any]:
     """运行策略回测"""
     _require_api_key(x_api_key)
-    return _run_tool("run_backtest", payload)
+    return _run_tool("run_backtest", payload.model_dump(exclude_unset=True))
 
 
 @app.post("/wfa")
-def api_wfa(payload: Dict[str, Any] = Body(default={}), x_api_key: Optional[str] = Header(default=None)) -> Dict[str, Any]:
+def api_wfa(payload: WfaPayload, x_api_key: str | None = Header(default=None)) -> dict[str, Any]:
     """滚动 Walk-Forward Analysis"""
     _require_api_key(x_api_key)
-    return _run_tool("walk_forward_analysis", payload)
+    return _run_tool("walk_forward_analysis", payload.model_dump(exclude_unset=True))
 
 
 @app.post("/optimize")
-def api_optimize(payload: Dict[str, Any] = Body(default={}), x_api_key: Optional[str] = Header(default=None)) -> Dict[str, Any]:
+def api_optimize(payload: OptimizePayload, x_api_key: str | None = Header(default=None)) -> dict[str, Any]:
     """组合优化"""
     _require_api_key(x_api_key)
-    return _run_tool("optimize_portfolio", payload)
+    return _run_tool("optimize_portfolio", payload.model_dump(exclude_unset=True))
 
 
 @app.post("/regime_allocate")
-def api_regime_allocate(payload: Dict[str, Any] = Body(default={}), x_api_key: Optional[str] = Header(default=None)) -> Dict[str, Any]:
+def api_regime_allocate(payload: RegimeAllocatePayload, x_api_key: str | None = Header(default=None)) -> dict[str, Any]:
     """市场状态路由分配"""
     _require_api_key(x_api_key)
-    return _run_tool("regime_aware_allocation", payload)
+    return _run_tool("regime_aware_allocation", payload.model_dump(exclude_unset=True))
 
 
 @app.post("/estimate_cost")
-def api_estimate_cost(payload: Dict[str, Any] = Body(default={}), x_api_key: Optional[str] = Header(default=None)) -> Dict[str, Any]:
+def api_estimate_cost(payload: EstimateCostPayload, x_api_key: str | None = Header(default=None)) -> dict[str, Any]:
     """交易成本估算"""
     _require_api_key(x_api_key)
-    return _run_tool("estimate_transaction_cost", payload)
+    return _run_tool("estimate_transaction_cost", payload.model_dump(exclude_unset=True))
 
 
 @app.post("/execution_plan")
-def api_execution_plan(payload: Dict[str, Any] = Body(default={}), x_api_key: Optional[str] = Header(default=None)) -> Dict[str, Any]:
+def api_execution_plan(payload: ExecutionPlanPayload, x_api_key: str | None = Header(default=None)) -> dict[str, Any]:
     """生成执行计划"""
     _require_api_key(x_api_key)
-    return _run_tool("generate_execution_plan", payload)
+    return _run_tool("generate_execution_plan", payload.model_dump(exclude_unset=True))
 
 
 @app.post("/validate_signal")
-def api_validate_signal(payload: Dict[str, Any] = Body(default={}), x_api_key: Optional[str] = Header(default=None)) -> Dict[str, Any]:
+def api_validate_signal(payload: ValidateSignalPayload, x_api_key: str | None = Header(default=None)) -> dict[str, Any]:
     """信号有效性验证"""
     _require_api_key(x_api_key)
-    return _run_tool("validate_signal", payload)
+    return _run_tool("validate_signal", payload.model_dump(exclude_unset=True))
 
 
 @app.post("/regime")
-def api_regime(payload: Dict[str, Any] = Body(default={}), x_api_key: Optional[str] = Header(default=None)) -> Dict[str, Any]:
-    """市场状态诊断"""
+def api_regime(
+    payload: RegimePayload = Body(default=RegimePayload()),
+    x_api_key: str | None = Header(default=None),
+) -> dict[str, Any]:
+    """市场状态诊断（允许空请求体，等价 {}）"""
     _require_api_key(x_api_key)
-    return _run_tool("diagnose_market_regime", payload)
+    return _run_tool("diagnose_market_regime", payload.model_dump(exclude_unset=True))
 
 
 @app.post("/valuation")
-def api_valuation(payload: Dict[str, Any] = Body(default={}), x_api_key: Optional[str] = Header(default=None)) -> Dict[str, Any]:
+def api_valuation(payload: ValuationPayload, x_api_key: str | None = Header(default=None)) -> dict[str, Any]:
     """估值锚定"""
     _require_api_key(x_api_key)
-    return _run_tool("valuation_anchor", payload)
+    return _run_tool("valuation_anchor", payload.model_dump(exclude_unset=True))
 
 
 @app.post("/scorecard")
-def api_scorecard(payload: Dict[str, Any] = Body(default={}), x_api_key: Optional[str] = Header(default=None)) -> Dict[str, Any]:
+def api_scorecard(payload: ScorecardPayload, x_api_key: str | None = Header(default=None)) -> dict[str, Any]:
     """基本面评分卡"""
     _require_api_key(x_api_key)
-    return _run_tool("fundamental_scorecard", payload)
+    return _run_tool("fundamental_scorecard", payload.model_dump(exclude_unset=True))
 
 
 # ═══════════════════════════════════════════
@@ -159,7 +291,7 @@ def api_scorecard(payload: Dict[str, Any] = Body(default={}), x_api_key: Optiona
 
 
 @app.get("/health")
-def api_health() -> Dict[str, Any]:
+def api_health() -> dict[str, Any]:
     """健康检查"""
     t3 = get_trader3()
     return {
@@ -173,7 +305,7 @@ def api_health() -> Dict[str, Any]:
 
 
 @app.get("/tools")
-def api_tools(x_api_key: Optional[str] = Header(default=None)) -> Dict[str, Any]:
+def api_tools(x_api_key: str | None = Header(default=None)) -> dict[str, Any]:
     """工具清单"""
     _require_api_key(x_api_key)
     t3 = get_trader3()

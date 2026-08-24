@@ -12,12 +12,10 @@
 所有断言基于确定性（固定随机种子），可重复运行。
 """
 
-import math
 
 import pytest
 
 from trader3 import Trader3, Trader3Response
-
 
 # ═══════════════════════════════════════════
 # M1 回测引擎
@@ -57,7 +55,8 @@ class TestBacktestReal:
             assert k in r.key_metrics, f"missing key_metrics: {k}"
 
         # 分时段表现保留；伪归因已移除（post-audit-4）：字段必须为空且报告明示不提供
-        assert not report.brinson_allocation and not report.barra_exposure
+        assert not getattr(report, "brinson_allocation", None) and not getattr(
+            report, "barra_exposure", None)  # 伪归因字段已整体移除
         assert any("不提供" in c for c in r.caveats)
         assert "trending_up" in report.period_returns
 

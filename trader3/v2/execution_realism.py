@@ -24,7 +24,6 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Dict, Optional, Tuple
 
 from trader3.v2.costs import DEFAULT_COSTS
 from trader3.v2.fillers import FixedSizeFiller
@@ -55,9 +54,9 @@ class PositionT1Account:
     """T+1 两态账户：买入冻资+today 冻结，卖出仅可卖量，日终结算复位"""
 
     def __init__(self, cash: float = 1e7, buy_frozen_coeff: float = 1.0,
-                 commission_rate: Optional[float] = None,
-                 stamp_tax_rate: Optional[float] = None,
-                 filler: Optional[object] = None):
+                 commission_rate: float | None = None,
+                 stamp_tax_rate: float | None = None,
+                 filler: object | None = None):
         self.cash = cash
         self.buy_frozen_coeff = buy_frozen_coeff  # 买入冻资系数（A股一般全额，1.0）
         # 费率唯一事实来源 costs.DEFAULT_COSTS：bp/10000 换算，显式传参可覆盖
@@ -67,7 +66,7 @@ class PositionT1Account:
                                if stamp_tax_rate is None else stamp_tax_rate)
         self.min_commission = DEFAULT_COSTS.min_commission  # 最低佣金（元/笔）
         self.filler = filler or FixedSizeFiller() # 成交量填充器（backtrader Fillers 风格）
-        self.stocks: Dict[str, PositionT1Stock] = {}
+        self.stocks: dict[str, PositionT1Stock] = {}
         self._today_value = 0.0   # 当日成交金额（供 风控流控 用）
         self._today_orders = 0
 
@@ -81,8 +80,8 @@ class PositionT1Account:
     # ── 买入 ──
 
     def buy(self, code: str, volume: float, price: float,
-            prev_close: Optional[float] = None, bar_volume: Optional[float] = None,
-            limit_pct: Optional[float] = None) -> Tuple[bool, str]:
+            prev_close: float | None = None, bar_volume: float | None = None,
+            limit_pct: float | None = None) -> tuple[bool, str]:
         """买入：冻结资金 → 成交（T+1 当日不可卖）
 
         传入 prev_close/bar_volume 时按 Filler 限制成交量：
@@ -119,8 +118,8 @@ class PositionT1Account:
     # ── 卖出 ──
 
     def sell(self, code: str, volume: float, price: float,
-             prev_close: Optional[float] = None, bar_volume: Optional[float] = None,
-             limit_pct: Optional[float] = None) -> Tuple[bool, str]:
+             prev_close: float | None = None, bar_volume: float | None = None,
+             limit_pct: float | None = None) -> tuple[bool, str]:
         """卖出：仅允许 可卖量=his；超量请求部分成交至可卖上限
 
         与买入部分成交行为一致：请求量 > 可卖量时按可卖上限成交，
@@ -211,7 +210,7 @@ class PositionT1Account:
         }
 
     @classmethod
-    def from_state(cls, state: dict, **kwargs) -> "PositionT1Account":
+    def from_state(cls, state: dict, **kwargs) -> PositionT1Account:
         """从 to_state 的字典恢复账户（缺省字段安全兜底）"""
         acct = cls(**kwargs)
         acct.cash = float(state.get("cash") or acct.cash)
@@ -240,7 +239,7 @@ class PriceLimitMatcher:
         limit = prev_close * (1 - self.limit_pct)
         return price > limit + self.tolerance
 
-    def check_order(self, action: str, price: float, prev_close: float) -> Tuple[bool, str]:
+    def check_order(self, action: str, price: float, prev_close: float) -> tuple[bool, str]:
         if action == "buy" and not self.can_buy(price, prev_close):
             return False, f"涨停中禁买: {price:.2f} >= 涨 停价 {prev_close*(1+self.limit_pct):.2f}"
         if action == "sell" and not self.can_sell(price, prev_close):

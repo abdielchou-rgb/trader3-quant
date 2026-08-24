@@ -5,7 +5,6 @@
 from __future__ import annotations
 
 import math
-from typing import Dict, List, Optional
 
 from trader3.base_tool import BaseTool, ChartSpec, Trader3Response
 from trader3.models import ExecutionPlan, TCAEstimate
@@ -61,7 +60,7 @@ def _almgren_chriss_impact(
     return abs(perm_bp) * 10000, abs(temp_bp) * 10000
 
 
-def _lookup(key: str, symbol: str, market_data: Dict, fallback: float) -> float:
+def _lookup(key: str, symbol: str, market_data: dict, fallback: float) -> float:
     """从 market_data 中安全取值"""
     if sd := market_data.get(symbol):
         val = sd.get(key)
@@ -80,9 +79,9 @@ class EstimateTransactionCostTool(BaseTool):
 
     def execute(
         self,
-        orders: List[Dict] = None,
+        orders: list[dict] = None,
         method: str = "implementation_shortfall",
-        market_data: Dict = None,
+        market_data: dict = None,
     ) -> Trader3Response:
         """Almgren-Chriss 驱动交易成本估算"""
         if not orders:
@@ -93,7 +92,6 @@ class EstimateTransactionCostTool(BaseTool):
 
         # 逐订单估算
         total_value_cny = 0.0
-        sum_commission_bp = _DEFAULT_COMMISSION_BP
         sum_stamp_bp = 0.0
         sum_impact_bp = 0.0
         sum_timing_bp = 0.0
@@ -136,7 +134,6 @@ class EstimateTransactionCostTool(BaseTool):
                 "timing_bp": round(timing, 1),
             })
 
-        n = len(orders)
         # 按订单金额加权平均（简单平均会放大/缩小大单的真实成本占比）
         w_total = sum(o.get("value_cny", 0) for o in orders) or 1.0
         avg_stamp = sum(
@@ -222,7 +219,7 @@ class EstimateTransactionCostTool(BaseTool):
         )
 
     @staticmethod
-    def _suggestions(orders: List[Dict], market_data: Dict, max_part: float) -> List[str]:
+    def _suggestions(orders: list[dict], market_data: dict, max_part: float) -> list[str]:
         s = []
         if max_part > 0.15:
             s.append("交易量较大，建议分批执行，每批不超过日均成交量的5%")
@@ -248,12 +245,12 @@ class GenerateExecutionPlanTool(BaseTool):
 
     def execute(
         self,
-        target_weights: Dict[str, float] = None,
-        current_weights: Dict[str, float] = None,
+        target_weights: dict[str, float] = None,
+        current_weights: dict[str, float] = None,
         algorithm: str = "adaptive_vwap",
         urgency: str = "normal",
         portfolio_value: float = 10_000_000.0,
-        market_data: Dict = None,
+        market_data: dict = None,
     ) -> Trader3Response:
         """生成执行计划"""
         target_weights = target_weights or {}
@@ -312,10 +309,10 @@ class GenerateExecutionPlanTool(BaseTool):
 
     @staticmethod
     def _compute_orders(
-        target_weights: Dict[str, float],
-        current_weights: Dict[str, float],
+        target_weights: dict[str, float],
+        current_weights: dict[str, float],
         portfolio_value: float,
-    ) -> List[Dict]:
+    ) -> list[dict]:
         """目标权重 -> 待执行订单（遍历 target ∪ current 并集，清仓股生成卖单）"""
         orders = []
         for sym in set(target_weights) | set(current_weights):
@@ -334,11 +331,11 @@ class GenerateExecutionPlanTool(BaseTool):
 
     def _generate_slices(
         self,
-        orders: List[Dict],
+        orders: list[dict],
         algorithm: str,
         urgency: str,
-        market_data: Dict,
-    ) -> List[Dict]:
+        market_data: dict,
+    ) -> list[dict]:
         """根据算法路由到具体切片策略"""
         if not orders:
             return []
@@ -352,7 +349,7 @@ class GenerateExecutionPlanTool(BaseTool):
             return self._adaptive(orders, urgency)
 
     @staticmethod
-    def _time_grid() -> List[str]:
+    def _time_grid() -> list[str]:
         """09:35 - 14:55 每30分钟，跳过 11:30-13:00 午休休市时段"""
         times = []
         h, m = 9, 35
@@ -369,7 +366,7 @@ class GenerateExecutionPlanTool(BaseTool):
         return [t for t in times if t <= "15:00"]
 
     @staticmethod
-    def _u_shape_weights(n: int) -> List[float]:
+    def _u_shape_weights(n: int) -> list[float]:
         """A股 U 型成交量分布：开盘/收盘放量，午间缩量"""
         if n <= 1:
             return [1.0]
@@ -388,7 +385,7 @@ class GenerateExecutionPlanTool(BaseTool):
 
     # ── 四种算法 ──
 
-    def _twap(self, orders: List[Dict], urgency: str) -> List[Dict]:
+    def _twap(self, orders: list[dict], urgency: str) -> list[dict]:
         """TWAP: 时间均匀切分"""
         times = self._time_grid()[:self._slice_count(urgency)]
         n = len(times)
@@ -404,7 +401,7 @@ class GenerateExecutionPlanTool(BaseTool):
                 })
         return slices
 
-    def _vwap(self, orders: List[Dict], urgency: str) -> List[Dict]:
+    def _vwap(self, orders: list[dict], urgency: str) -> list[dict]:
         """VWAP: U型成交量加权分布"""
         times = self._time_grid()[:self._slice_count(urgency)]
         n = len(times)
@@ -421,7 +418,7 @@ class GenerateExecutionPlanTool(BaseTool):
                 })
         return slices
 
-    def _is(self, orders: List[Dict], urgency: str) -> List[Dict]:
+    def _is(self, orders: list[dict], urgency: str) -> list[dict]:
         """Implementation Shortfall: 前端加载"""
         times = self._time_grid()[:max(4, self._slice_count(urgency))]
         n = len(times)
@@ -441,7 +438,7 @@ class GenerateExecutionPlanTool(BaseTool):
                 })
         return slices
 
-    def _adaptive(self, orders: List[Dict], urgency: str) -> List[Dict]:
+    def _adaptive(self, orders: list[dict], urgency: str) -> list[dict]:
         """Adaptive: high->IS, normal->VWAP, low->TWAP"""
         if urgency == "high":
             return self._is(orders, urgency)
@@ -458,8 +455,8 @@ class GenerateExecutionPlanTool(BaseTool):
     @staticmethod
     def _estimate_plan_cost(
         urgency: str,
-        orders: List[Dict] = None,
-        market_data: Dict = None,
+        orders: list[dict] = None,
+        market_data: dict = None,
     ) -> float:
         """计划成本 = 佣金/印花税底仓 + 冲击成本（随参与率平方根增长）+ 紧急度罚项"""
         penalty = {"high": 10.0, "normal": 0.0, "low": -3.0}.get(urgency, 0.0)
@@ -486,7 +483,7 @@ class GenerateExecutionPlanTool(BaseTool):
         return (impact / total_value) + penalty
 
     @staticmethod
-    def _compute_risk_limits(urgency: str) -> Dict[str, float]:
+    def _compute_risk_limits(urgency: str) -> dict[str, float]:
         dev = {"high": 0.03, "normal": 0.02, "low": 0.01}.get(urgency, 0.02)
         part = {"high": 0.15, "normal": 0.10, "low": 0.05}.get(urgency, 0.10)
         return {

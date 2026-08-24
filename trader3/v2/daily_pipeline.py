@@ -20,7 +20,6 @@ import argparse
 import logging
 import os
 from datetime import datetime
-from typing import Dict, List
 
 logger = logging.getLogger("trader3.v2.daily")
 
@@ -36,7 +35,7 @@ PAPER_NOTE = "纸面交易，非真实委托"
 
 
 def run_daily(
-    codes: List[str] = None,
+    codes: list[str] = None,
     collect_only: bool = False,
     collect_flow: bool = True,
     dry_run: bool = False,
@@ -106,7 +105,7 @@ def run_daily(
     return summary
 
 
-def run_paper_trades(triggered_results: List) -> dict:
+def run_paper_trades(triggered_results: list) -> dict:
     """对触发的买卖信号逐只纸面下单，并把账户状态原子落盘。
 
     - 账户持久化于 shared_state/paper/account.json（SharedState.write_json）：
@@ -128,12 +127,12 @@ def run_paper_trades(triggered_results: List) -> dict:
 
     acct = PositionT1Account.from_state(prev) if prev \
         else PositionT1Account(cash=PAPER_INITIAL_CASH)
-    trades_today: List[dict] = list(prev.get("trades_today") or [])
+    trades_today: list[dict] = list(prev.get("trades_today") or [])
     if prev.get("as_of") != today:      # 跨日：解冻 + 计数复位，重开交易日流水
         acct.settle()
         trades_today = []
 
-    latest_prices: Dict[str, float] = {}
+    latest_prices: dict[str, float] = {}
     for r in triggered_results:
         code = getattr(r, "code", "")
         direction = getattr(r, "direction", "buy")
