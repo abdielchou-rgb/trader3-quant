@@ -292,7 +292,7 @@ def test_dsr_known_values():
 
 def test_wfa_report_contains_dsr(monkeypatch, tmp_path):
     """真实小面板 WFA：结果 dict 有 dsr 键且 ∈[0,1]；
-    caveat 声明 'DSR=X.XX（已校正 N 次试验的多重比较）'。"""
+    caveat 声明 'DSR(PSR)=X.XX（单策略口径）'（跨策略校正归基线报告）。"""
     import trader3.tools.backtest as btmod
     from trader3.data_provider import QlibDataProvider
 
@@ -310,7 +310,7 @@ def test_wfa_report_contains_dsr(monkeypatch, tmp_path):
     assert math.isfinite(dsr_val) and 0.0 <= dsr_val <= 1.0, f"dsr 越界: {dsr_val}"
 
     joined = "\n".join(r.caveats)
-    assert re.search(r"DSR=\d\.\d{2}", joined), f"caveat 缺少 DSR 数值: {joined}"
-    assert f"已校正 {r.data.windows} 次试验的多重比较" in joined, (
+    assert re.search(r"DSR\(PSR\)=\d\.\d{2}", joined), f"caveat 缺少 DSR 数值: {joined}"
+    assert "DSR(PSR)=" in joined and "单策略口径" in joined, (
         f"caveat 未声明校正次数: {joined}"
     )

@@ -43,7 +43,18 @@ DEFAULT_N_STOCKS = 50       # 默认股票数
 REBALANCE_FREQ = 21         # 月频调仓
 MAX_UNIVERSE = 150          # 默认股票池上限（超出则确定性抽样）
 DEFAULT_PRICE_LIMIT = 0.098  # 涨跌停幅度默认值（主板；合成数据路径统一使用）
-CODE_VERSION = "post-audit-5"   # 回测代码版本号（参与缓存指纹，逻辑变更时递增）
+CODE_VERSION = "post-audit-6"   # 回测代码版本号（参与缓存指纹，逻辑变更时递增；
+# post-audit-6: 数据内容纪元——治愈尾部拼接修复后旧缓存全部作废）
+
+
+def _data_version_stamp() -> str:
+    """读取增量管线盖的章（qlib_bin 数据内容纪元）；缺失返回空串。"""
+    try:
+        from trader3.shared_state import SharedState
+        v = SharedState().read_json("data_version") or {}
+        return str((v.get("versions") or {}).get("qlib_bin", ""))
+    except Exception:
+        return ""
 # post-audit-5: 自定义信号表达式接入回测（signal_expr/factor_from_selected）；
 # WFA 测试段首日计入换手成本并套用涨跌停约束。
 # 归因诚实声明：Brinson 分解需要行业分类、Barra 暴露需要多因子库，
@@ -1093,14 +1104,14 @@ def _open_qlib_dp() -> Any:
     return QlibDataProvider()
 
 
-def _load_wfa_panel(dp: Any) -> tuple[list[str], np.ndarray, np.ndarray, np.ndarray]:
+def _load_wfa_panel(dp: Any) -> tuple[list[str], np.ndarray, np.ndarray, np.ndarray, list[str]]:
     """
     WFA 全历史面板：成分池取 csi300（按日历起点 asof 过滤，防幸存者偏差），
     缺失时回退 all；超上限按固定种子确定性抽样。
 
     Returns
     -------
-    (codes_list, close_matrix, returns_matrix, valid_flags)
+    (codes_list, close_matrix, returns_matrix, valid_flags, time_axis)
     """
     cal = dp.calendar()
     if not cal:
@@ -1123,10 +1134,10 @@ def _load_wfa_panel(dp: Any) -> tuple[list[str], np.ndarray, np.ndarray, np.ndar
         pick = rng.choice(len(codes), size=MAX_UNIVERSE, replace=False)
         codes = sorted(codes[i] for i in pick)
 
-    _, codes_list, close_matrix, returns_matrix, valid_flags, _ = _build_aligned_panel(
-        dp, codes, start_date, end_date
+    time_axis, codes_list, close_matrix, returns_matrix, valid_flags, _n_skip = (
+        _build_aligned_panel(dp, codes, start_date, end_date)
     )
-    return codes_list, close_matrix, returns_matrix, valid_flags
+    return codes_list, close_matrix, returns_matrix, valid_flags, time_axis
 
 
 def _run_wfa_rolling(
@@ -1314,6 +1325,8 @@ class RunBacktestTool(BaseTool):
             "engine_tag": engine_tag,          # 'real' / 'synthetic'
             "data_end": data_end,              # qlib 日历末日
             "code_version": CODE_VERSION,
+            # 数据内容纪元：增量管线盖章的 qlib_bin 版本（治愈/重刷后自动失效旧缓存）
+            "data_version": _data_version_stamp(),
             # 信号源指纹：自定义表达式取 sha1（空串=默认动量），不同表达式互不共享缓存
             "signal_sha1": (
                 hashlib.sha1(signal_expr.encode("utf-8")).hexdigest()
@@ -1837,6 +1850,8 @@ class WalkForwardAnalysisTool(BaseTool):
         strategy_config: StrategyConfig | None = None,
         train_window: int = 252,
         test_window: int = 63,
+        signal_expr: str = "",
+        signal_exprs: list[str] | None = None,
         step: int | None = None,
     ) -> Trader3Response:
         """
@@ -1855,18 +1870,68 @@ class WalkForwardAnalysisTool(BaseTool):
 
         panel = None
         panel_err: Exception | None = None
+        dp = None
         try:
-            panel = _load_wfa_panel(_open_qlib_dp())
+            dp = _open_qlib_dp()
+            panel = _load_wfa_panel(dp)
         except Exception as e:  # 数据缺失/损坏 → 合成回退
             panel_err = e
 
         exec_codes: list[str] | None = None
         if panel is not None:
-            codes_list, close_matrix, returns_matrix, _valid_flags = panel
+            codes_list, close_matrix, returns_matrix, _valid_flags, time_axis = panel
             stock_returns = returns_matrix
-            factor_scores = _momentum_scores(close_matrix)
+            if signal_expr:
+                try:
+                    node = _prepare_expr(signal_expr)
+                except Exception as e:
+                    return Trader3Response.error(f"signal_expr 非法: {e}")
+                expr_fields = _collect_expr_fields(node)
+                close_panel = np.where(close_matrix > 0, close_matrix, np.nan)
+                extra_fields = {f for f in expr_fields if f != "close"}
+                expr_panels: dict[str, np.ndarray] = {"close": close_panel}
+                if extra_fields:
+                    expr_panels.update(
+                        _load_expression_panels(dp, codes_list, time_axis, extra_fields)
+                    )
+                missing = {f for f in expr_fields if f not in expr_panels}
+                if missing - {"close"}:
+                    return Trader3Response.error(
+                        f"WFA 表达式字段缺失: {sorted(missing)}"
+                    )
+                factor_scores = _expr_scores(node, expr_panels, _valid_flags)
+            elif signal_exprs:
+                try:
+                    nodes = [_prepare_expr(e) for e in signal_exprs]
+                except Exception as e:
+                    return Trader3Response.error(f"signal_exprs 非法: {e}")
+                union_fields: set[str] = set()
+                for node in nodes:
+                    union_fields |= _collect_expr_fields(node)
+                close_panel = np.where(close_matrix > 0, close_matrix, np.nan)
+                extra_fields = {f for f in union_fields if f != "close"}
+                expr_panels = {"close": close_panel}
+                if extra_fields:
+                    expr_panels.update(
+                        _load_expression_panels(dp, codes_list, time_axis, extra_fields)
+                    )
+                missing = {f for f in union_fields if f not in expr_panels}
+                if missing - {"close"}:
+                    return Trader3Response.error(
+                        f"WFA 表达式字段缺失: {sorted(missing)}"
+                    )
+                z_stack = np.stack(
+                    [_expr_zscores(n, expr_panels, _valid_flags) for n in nodes]
+                )
+                combined = _combine_factor_scores(z_stack)
+                factor_scores = np.where(np.isfinite(combined), combined, -np.inf)
+            else:
+                factor_scores = _momentum_scores(close_matrix)
             exec_codes = codes_list  # 涨跌停幅度逐股按板块判定
             engine_caveat = "WFA 基于真实 qlib 数据"
+            if signal_expr or signal_exprs:
+                src = signal_expr or " + ".join(signal_exprs or [])
+                engine_caveat += f"；信号源: {src}"
             if eff_step >= test_window:
                 engine_caveat += "，OOS 窗口非重叠"
             engine_caveat += (
@@ -1874,6 +1939,11 @@ class WalkForwardAnalysisTool(BaseTool):
                 "成分按起点 asof 过滤）"
             )
         else:
+            if signal_expr or signal_exprs:
+                return Trader3Response.error(
+                    "signal_expr(s) 模式需要真实 qlib 面板；当前不可用，"
+                    "拒绝静默回退合成动量（会丢弃用户信号定义）"
+                )
             T = max(252 * 6, train_window + test_window + eff_step * 5 + 10)
             N = DEFAULT_N_STOCKS
             rng = np.random.default_rng(123)  # WFA 合成回退独立种子
@@ -1907,22 +1977,19 @@ class WalkForwardAnalysisTool(BaseTool):
         oos_mean_return = _annualized_return(oos_concat)
         oos_sharpe = _annualized_sharpe(oos_concat)
 
-        # ── Deflated Sharpe：n_trials 取滚动窗口数（每窗配置算一次试验的诚实下界），
-        #    sr_variance 用各窗 OOS Sharpe（年化→日频）的样本方差 ──
+        # ── Deflated Sharpe（单策略口径 = PSR）：滚动窗口是"同策略的时间分段"，
+        #    不构成独立试验数；跨策略的多重比较校正由基线跑批脚本在
+        #    策略集合层面统一计算（n_trials=策略数）。此处 n_trials=1。──
         sqrt_ann = math.sqrt(TRADING_DAYS_PER_YEAR)
-        window_sr_daily = np.asarray(oos_sharpes, dtype=np.float64) / sqrt_ann
-        sr_variance = (
-            float(np.var(window_sr_daily, ddof=1)) if window_sr_daily.size >= 2 else None
-        )
         dsr_value = deflated_sharpe_ratio(
             sharpe_observed=oos_sharpe / sqrt_ann,
-            n_trials=len(windows),
-            sr_variance=sr_variance,
+            n_trials=1,
+            sr_variance=None,
             tail_risk_adj=True,
             returns=oos_concat if oos_concat.size else None,
             n_periods=int(oos_concat.size),
         )
-        dsr_caveat = f"DSR={dsr_value:.2f}（已校正 {len(windows)} 次试验的多重比较）"
+        dsr_caveat = f"DSR(PSR)={dsr_value:.2f}（单策略口径；跨策略校正见基线报告）"
 
         if mean_is_sr > 1e-10:
             overfitting_probability = min(
