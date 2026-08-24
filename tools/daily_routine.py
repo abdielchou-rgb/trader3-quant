@@ -11,6 +11,7 @@ AKSHARE_SCRIPT = os.path.join(PROJECT, "evolve", "scripts", "fetch_etf_data.py")
 STATE_FILE = os.path.join(PROJECT, "evolve", "last_daily_run.json")
 
 TASKS = {
+    "market_data_update": "qlib_bin 增量更新（指数重建+日历扩展）",
     "etf_data": "拉取 ETF 日线数据（akshare）",
     "evolve_csi300": "CSI300 策略进化",
     "evolve_csi500": "CSI500 策略进化",
@@ -37,6 +38,12 @@ def main():
     today = datetime.now().strftime("%Y-%m-%d")
     universes = [u.strip() for u in args.universe.split(",")]
     results = {"date": today, "tasks": {}}
+
+    # Step 0: qlib_bin 增量更新（指数重建 + data_version 盖章，失败不阻断后续）
+    update_script = os.path.join(PROJECT, "scripts", "update_market_data.py")
+    if os.path.exists(update_script):
+        ok, out = run(f'python "{update_script}" --apply', TASKS["market_data_update"])
+        results["tasks"]["market_data_update"] = {"ok": ok, "output": (out or "")[-500:]}
 
     # Step 1: ETF 数据拉取（每天拉最新）
     if not args.skip_etf_data:
