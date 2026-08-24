@@ -1,0 +1,100 @@
+{
+  "source": "qlib/csi300",
+  "date_range": [
+    "2020-01-01",
+    "2023-12-31"
+  ],
+  "panel_shape": [
+    970,
+    60
+  ],
+  "population_size": 50,
+  "generations": 15,
+  "elapsed_seconds": 64.9,
+  "candidates_considered": 65,
+  "selected_count": 2,
+  "best_fitness": 0.623,
+  "selected": [
+    {
+      "expr": "sub(log(vwap), log(close))",
+      "score": 0.5487,
+      "gates": {
+        "ic": {
+          "passed": true,
+          "value": 0.0495
+        },
+        "icir": {
+          "passed": true,
+          "value": 0.2493
+        },
+        "monotonicity": {
+          "passed": true,
+          "value": 1.0
+        },
+        "long_short": {
+          "passed": true,
+          "value": 0.4966
+        },
+        "complexity": {
+          "passed": true,
+          "value": 2
+        },
+        "uniqueness": {
+          "passed": true,
+          "value": 1
+        }
+      },
+      "source": "qlib/csi300",
+      "created": "2026-08-24 19:39:41"
+    },
+    {
+      "expr": "neg(sub(amount, open))",
+      "score": 0.4349,
+      "gates": {
+        "ic": {
+          "passed": true,
+          "value": 0.0355
+        },
+        "icir": {
+          "passed": true,
+          "value": 0.1934
+        },
+        "monotonicity": {
+          "passed": true,
+          "value": 1.0
+        },
+        "long_short": {
+          "passed": true,
+          "value": 0.1919
+        },
+        "complexity": {
+          "passed": true,
+          "value": 2
+        },
+        "uniqueness": {
+          "passed": true,
+          "value": 0.0113
+        }
+      },
+      "source": "qlib/csi300",
+      "created": "2026-08-24 19:39:41"
+    }
+  ],
+  "fitness_history": [
+    -0.1941194444444444,
+    0.06438199999999998,
+    0.05748367346938776,
+    0.178354,
+    0.23703478260869568,
+    0.21122173913043477,
+    0.21361224489795916,
+    0.168078,
+    0.23084545454545458,
+    0.156552,
+    0.19625599999999999,
+    0.1528311111111111,
+    0.17114375,
+    0.11811428571428573,
+    0.1485530612244898
+  ]
+}

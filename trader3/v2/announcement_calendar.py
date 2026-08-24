@@ -51,6 +51,48 @@ def _norm_code(code: str) -> str:
     return c.zfill(6)[:6]
 
 
+# --- 显式公告日历（disclosure_sync 产出）模块级 loader ---
+_EXPLICIT_CACHE: dict = {"key": None, "data": None}
+
+
+def _load_explicit_calendar() -> Dict[str, Dict[str, str]]:
+    """读取 data/disclosure_calendar.json（{code:{quarter:announce_date}}），mtime 缓存。
+
+    disclosure_sync 缺失或文件缺失时返回 {}，不影响推断兜底。
+    """
+    try:
+        from trader3.v2.disclosure_sync import default_calendar_path
+        path = default_calendar_path()
+    except ImportError:
+        return {}
+    key = (str(path), None)
+    try:
+        key = (str(path), path.stat().st_mtime_ns)
+    except OSError:
+        pass
+    if _EXPLICIT_CACHE["key"] == key:
+        return _EXPLICIT_CACHE["data"]
+    data: Dict[str, Dict[str, str]] = {}
+    try:
+        from trader3.v2.disclosure_sync import load_explicit_calendar
+        loaded = load_explicit_calendar()
+        if isinstance(loaded, dict):
+            data = loaded
+    except ImportError:
+        pass
+    _EXPLICIT_CACHE["key"] = key
+    _EXPLICIT_CACHE["data"] = data
+    return data
+
+
+def _resolve_announce(code: str, quarter: str):
+    """→ (公告日, 'explicit'|'inferred')；无显式值时规律推断兜底"""
+    explicit = _load_explicit_calendar().get(_norm_code(code), {}).get(quarter[:10])
+    if explicit:
+        return explicit, "explicit"
+    return _announce_date(quarter), "inferred"
+
+
 class AnnouncementCalendar:
     """报告期→公告日 映射 + 防前视财务快照"""
 
@@ -59,8 +101,8 @@ class AnnouncementCalendar:
         self.fp = FinancialsProvider()
 
     def announce_date(self, code: str, quarter: str) -> str:
-        """报告期 quarter → 公告日（规律兜底；真实值可由 akshare 补充）"""
-        return _announce_date(quarter)
+        """报告期 quarter → 公告日（显式日历优先，规律兜底）"""
+        return _resolve_announce(code, quarter)[0]
 
     def latest_asof(self, code: str, asof_date: str) -> Optional[str]:
         """asof 日前最新的可用 quarter（公告日 ≤ asof）"""
@@ -92,12 +134,21 @@ class AnnouncementCalendar:
         for row in cur.fetchall():
             out[f"{row[0]}.{row[1]}"] = row[2]
             out[row[1]] = row[2]
+        ann, source = _resolve_announce(code, q)
+        if source == "explicit":
+            logger.info("financials_asof %s %s 命中显式披露日历（公告日=%s）", code, q, ann)
         out["quarter"] = q
-        out["announce_date"] = self.announce_date(code, q)
+        out["announce_date"] = ann
+        out["announce_source"] = source
         return out
 
     def summary(self) -> dict:
-        return {"module": "announcement_calendar", "mode": "fooltrader-防前视"}
+        explicit = _load_explicit_calendar()
+        return {
+            "module": "announcement_calendar",
+            "mode": "fooltrader-防前视",
+            "explicit_codes": len(explicit),
+        }
 
 
 def get_calendar() -> AnnouncementCalendar:

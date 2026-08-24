@@ -44,10 +44,17 @@ DEFAULT_N_STOCKS = 50       # 默认股票数
 REBALANCE_FREQ = 21         # 月频调仓
 MAX_UNIVERSE = 150          # 默认股票池上限（超出则确定性抽样）
 DEFAULT_PRICE_LIMIT = 0.098  # 涨跌停幅度默认值（主板；合成数据路径统一使用）
-CODE_VERSION = "post-audit-4"   # 回测代码版本号（参与缓存指纹，逻辑变更时递增）
+CODE_VERSION = "post-audit-5"   # 回测代码版本号（参与缓存指纹，逻辑变更时递增）
+# post-audit-5: 自定义信号表达式接入回测（signal_expr/factor_from_selected）；
+# WFA 测试段首日计入换手成本并套用涨跌停约束。
 # 归因诚实声明：Brinson 分解需要行业分类、Barra 暴露需要多因子库，
 # 数据缺位时不以常数拆分冒充实测（post-audit-4 移除伪归因）。
 ATTRIBUTION_CAVEAT = "行业归因(Brinson)与风险暴露(Barra)需要行业分类与多因子库，当前版本不提供"
+
+# 项目根目录（selected.json 等共享资源基于此解析；测试可 monkeypatch 重定向）
+_PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+SELECTED_JSON_REL = os.path.join("evolve", "strategies", "selected.json")
+SIGNAL_SOURCE_CAVEAT_FMT = "信号源: 自定义表达式 {expr}（evolve GP 语法）"
 
 
 # ═══════════════════════════════════════════
@@ -588,6 +595,156 @@ def _momentum_scores(close_matrix: np.ndarray, lookback: int = 20) -> np.ndarray
     return momentum
 
 
+class _SignalExprError(ValueError):
+    """自定义信号表达式解析/求值失败（execute 层转为 error 响应，不走合成回退）。"""
+
+
+def _prepare_expr(expr: str) -> Any:
+    """
+    解析并规范化因子表达式（evolve GP 语法）。
+
+    Returns
+    -------
+    normalize 后的 Node 表达式树。
+
+    Raises
+    ------
+    _SignalExprError — 语法非法（含原因）。
+    """
+    try:
+        from evolve.core.parser import parse_expr
+        from evolve.core.gp import normalize
+
+        node = parse_expr(str(expr))
+        return normalize(node)
+    except _SignalExprError:
+        raise
+    except Exception as e:
+        raise _SignalExprError(f"表达式无法解析: {e}") from e
+
+
+def _collect_expr_fields(node: Any) -> set:
+    """收集表达式树引用的行情字段集合（open/high/low/close/volume/vwap/amount）。"""
+    from evolve.core.gp import FIELDS
+
+    if node.op == "const":
+        return set()
+    out = {node.op} if node.op in FIELDS else set()
+    for child in node.children:
+        out |= _collect_expr_fields(child)
+    return out
+
+
+def _load_expression_panels(
+    dp: Any,
+    codes_list: List[str],
+    time_axis: List[str],
+    fields: set,
+) -> Dict[str, np.ndarray]:
+    """
+    按 codes_list × time_axis 对齐加载表达式所需字段面板 {field: (T,M)}。
+
+    缺失/停牌处为 NaN；整列字段加载失败（bin 不存在等）则不进入返回 dict，
+    由调用方做字段缺失校验。
+    """
+    date_index = {d: i for i, d in enumerate(time_axis)}
+    T, M = len(time_axis), len(codes_list)
+    panels: Dict[str, np.ndarray] = {}
+    for fld in sorted(fields):
+        mat = np.full((T, M), np.nan, dtype=np.float64)
+        loaded_any = False
+        for j, code in enumerate(codes_list):
+            try:
+                vals, dates = dp.load_stock(code.lower(), fld, time_axis[0], time_axis[-1])
+            except Exception:
+                continue
+            for i, d in enumerate(dates):
+                pos = date_index.get(d)
+                if pos is not None and np.isfinite(vals[i]) and vals[i] > 0:
+                    mat[pos, j] = vals[i]
+                    loaded_any = True
+        if loaded_any:
+            panels[fld] = mat
+    return panels
+
+
+def _expr_scores(
+    node: Any,
+    panels: Dict[str, np.ndarray],
+    valid_flags: np.ndarray,
+) -> np.ndarray:
+    """
+    在已对齐面板上求值表达式 → 归一化 (T,N) 分数矩阵。
+
+    - 引用字段缺面板 → 报错（gp.evaluate 对缺失字段默认补零，静默补零会伪装信号）；
+    - 求值抛错 / 结果全 NaN → 报错；
+    - 逐日横截面 z-score 归一化；无效（NaN 或 valid_flags=False）处置 -inf 落选。
+
+    Raises
+    ------
+    _SignalExprError — 字段缺失 / 求值失败 / 全 NaN / 形状不符。
+    """
+    need = _collect_expr_fields(node)
+    missing = sorted(f for f in need if f not in panels)
+    if missing:
+        raise _SignalExprError(f"表达式引用字段数据缺失: {', '.join(missing)}")
+
+    try:
+        from evolve.core.gp import evaluate
+
+        with np.errstate(all="ignore"):
+            raw = np.asarray(evaluate(node, panels), dtype=np.float64)
+    except _SignalExprError:
+        raise
+    except Exception as e:
+        raise _SignalExprError(f"表达式求值失败: {e}") from e
+
+    if raw.ndim != 2 or raw.shape != valid_flags.shape:
+        raise _SignalExprError(
+            f"表达式结果形状异常: {getattr(raw, 'shape', None)} != {(valid_flags.shape)}"
+        )
+    if not np.isfinite(raw).any():
+        raise _SignalExprError("表达式计算结果全为 NaN，无法作为选股信号")
+
+    vals = np.where(np.isfinite(raw) & valid_flags, raw, np.nan)
+    with np.errstate(all="ignore"):
+        mu = np.nanmean(vals, axis=1, keepdims=True)
+        sd = np.nanstd(vals, axis=1, keepdims=True)
+    z = (vals - mu) / (sd + 1e-12)
+    return np.where(np.isfinite(z), z, -np.inf)
+
+
+def _load_expr_from_selected(rank: int) -> str:
+    """
+    从 <项目根>/evolve/strategies/selected.json 读取第 rank 名因子的 expr。
+
+    文件按分数降序排列（run_evolution.py 写出），rank=1 即第一名。
+
+    Raises
+    ------
+    FileNotFoundError / ValueError / IndexError — 均带明确原因，由 execute 层转 error 响应。
+    """
+    path = os.path.join(_PROJECT_ROOT, SELECTED_JSON_REL)
+    if not os.path.exists(path):
+        raise FileNotFoundError(f"未找到 selected.json: {path}")
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            entries = json.load(f)
+    except Exception as e:
+        raise ValueError(f"selected.json 解析失败 ({path}): {e}") from e
+    if not isinstance(entries, list) or not entries:
+        raise ValueError(f"selected.json 为空或格式非法（应为非空数组）: {path}")
+    if not 1 <= int(rank) <= len(entries):
+        raise IndexError(
+            f"factor_from_selected={rank} 超出范围（selected.json 共 {len(entries)} 名）"
+        )
+    entry = entries[int(rank) - 1]
+    expr = str(entry.get("expr", "")).strip() if isinstance(entry, dict) else ""
+    if not expr:
+        raise ValueError(f"selected.json 第 {rank} 名缺少 expr 字段")
+    return expr
+
+
 def _build_aligned_panel(dp: Any, codes: List[str], start_date: str, end_date: str) -> Tuple[
     List[str], List[str], np.ndarray, np.ndarray, np.ndarray, int
 ]:
@@ -668,12 +825,16 @@ def _run_momentum_backtest(
     max_single_w: float,
     commission: Optional[CommissionInfo] = None,
     codes: Optional[List[str]] = None,
+    score_matrix: Optional[np.ndarray] = None,
 ) -> Tuple[np.ndarray, np.ndarray, float, int, Dict[str, Any]]:
     """
     真实面板动量组合回测（月频调仓；与合成引擎共用执行语义）：
 
-    - 防前视 pending：t 日收盘动量信号只挂起，t+1 生效（首日建仓立即生效、末日跳过）；
+    - 防前视 pending：t 日收盘信号只挂起，t+1 生效（首日建仓立即生效、末日跳过）；
     - 执行日涨跌停拦截 + 显式现金跟踪（见 _apply_execution_constraints）；
+    - 打分函数可插拔：score_matrix 为 None 时内部计算 20 日对数动量；
+      传入 (T,N) 矩阵（如自定义因子表达式归一化结果）时替代动量进入同一
+      pending 权重模拟（选股=分数 top-n_hold）；
     - 供 run_backtest 真实路径调用。
 
     Returns
@@ -681,7 +842,9 @@ def _run_momentum_backtest(
     equity, port_returns, turnover_total, positive_days, stats
     （stats 含 limit_up_blocked / limit_down_blocked / final_cash_weight）
     """
-    momentum = _momentum_scores(close_matrix)
+    scores = (
+        _momentum_scores(close_matrix) if score_matrix is None else score_matrix
+    )
     T, N = returns_matrix.shape
     weights = np.zeros(N, dtype=np.float64)
     old_weights = np.zeros(N, dtype=np.float64)
@@ -721,7 +884,7 @@ def _run_momentum_backtest(
         # 2) t 日收盘信号 → 只计算目标权重挂起，t+1 生效（末日跳过）
         if ((t == 0) or ((t + 1) % REBALANCE_FREQ == 0)) and (t < T - 1):
             pending = _equal_weight_targets(
-                momentum[t], valid_flags[t], n_hold, True, max_single_w
+                scores[t], valid_flags[t], n_hold, True, max_single_w
             )
             if t == 0:
                 # 首日空仓建仓，立即生效（不受涨跌停约束）
@@ -795,6 +958,8 @@ def _run_wfa_rolling(
     train_window: int,
     test_window: int,
     step: int,
+    codes: Optional[List[str]] = None,
+    commission: Optional[CommissionInfo] = None,
 ) -> Tuple[List[dict], List[float], List[float], List[float], List[float],
            List[np.ndarray], np.ndarray]:
     """
@@ -805,13 +970,34 @@ def _run_wfa_rolling(
     窗口间前进 step 天。OOS 日收益逐窗拼接（step ≥ test_window 时天然非重叠），
     供汇总指标在非重叠样本上计算。
 
+    交易现实性（post-audit-5）：
+    - 测试段首日视为调仓执行日：复用主循环同款规则
+      （_apply_execution_constraints：涨停拦买、跌停滞卖；空仓建仓场景仅买单）
+      并按 DEFAULT_COSTS（或显式传入的 commission）对实际成交换手扣单边成本；
+    - 段内不调仓，持仓权重保持首日实际成交结果至窗口结束；
+    - 被涨停拦截未建仓的资金按现金处理（收益 0），不参与段内收益。
+
+    Parameters
+    ----------
+    codes : 可选，与 stock_returns 列一一对应；提供时涨跌停幅度逐股按板块判定，
+            否则统一主板 DEFAULT_PRICE_LIMIT。
+    commission : 可选费用模型；None 用 DEFAULT_COSTS。
+
     Returns
     -------
     windows, is_ann_list, oos_ann_list, is_sr_list, oos_sr_list,
-    param_weights, oos_concat（拼接 OOS 日收益 np.ndarray）
+    param_weights, oos_concat（拼接 OOS 日收益 np.ndarray，已扣首日建仓成本）
     """
     T, N = stock_returns.shape
     top_k = max(N // 5, 10)
+    cm = commission if commission is not None else DEFAULT_COSTS
+
+    if codes is not None:
+        limit_ratios = np.array(
+            [_price_limit_ratio(c) for c in codes], dtype=np.float64
+        )
+    else:
+        limit_ratios = np.full(N, DEFAULT_PRICE_LIMIT, dtype=np.float64)
 
     windows: List[dict] = []
     is_ann_list: List[float] = []
@@ -840,14 +1026,27 @@ def _run_wfa_rolling(
         weights = np.zeros(N, dtype=np.float64)
         weights[selected] = 1.0 / top_k
 
-        # IS 表现
+        # IS 表现（参数拟合口径，毛收益）
         is_rets = stock_returns[is_slice] @ weights
         is_ann = float(np.mean(is_rets)) * TRADING_DAYS_PER_YEAR
         is_std = float(np.std(is_rets, ddof=1)) * math.sqrt(TRADING_DAYS_PER_YEAR)
         is_sr = is_ann / is_std if is_std > 1e-10 else 0.0
 
-        # OOS 表现（固定 IS 权重 → 测试段日收益序列，拼接进非重叠 OOS 样本）
-        oos_rets = stock_returns[oos_slice] @ weights
+        # 测试段首日=调仓执行日：主循环同款约束撮合 + 实际成交换手计成本
+        oos_start = s + train_window
+        effective, cash_weight, _n_up, _n_down = _apply_execution_constraints(
+            np.zeros(N, dtype=np.float64),
+            weights,
+            stock_returns[oos_start],
+            limit_ratios,
+            0.0,
+        )
+        executed_delta = float(np.sum(np.abs(effective)))  # 空仓建仓：|eff - 0|
+        day0_cost = cm.turnover_cost(executed_delta)
+
+        # OOS 表现（首日实际成交权重持有全段；首日扣建仓成本，现金收益按 0 计）
+        oos_rets = stock_returns[oos_slice] @ effective
+        oos_rets[0] = float(effective @ stock_returns[oos_start]) + cash_weight * 0.0 - day0_cost
         oos_ann = float(np.mean(oos_rets)) * TRADING_DAYS_PER_YEAR
         oos_std = float(np.std(oos_rets, ddof=1)) * math.sqrt(TRADING_DAYS_PER_YEAR)
         oos_sr = oos_ann / oos_std if oos_std > 1e-10 else 0.0
@@ -858,7 +1057,7 @@ def _run_wfa_rolling(
             "oos_return": oos_ann,
             "is_sharpe": is_sr,
             "oos_sharpe": oos_sr,
-            "oos_start": s + train_window,
+            "oos_start": oos_start,
             "oos_days": int(test_window),
         })
         is_ann_list.append(is_ann)
@@ -915,8 +1114,9 @@ class RunBacktestTool(BaseTool):
         *,
         engine_tag: str = "real",
         data_end: str = "",
+        signal_expr: str = "",
     ) -> str:
-        """sha256 策略指纹（含 constraints/引擎标识/数据末端/代码版本，防张冠李戴命中）"""
+        """sha256 策略指纹（含 constraints/引擎标识/数据末端/代码版本/信号表达式，防张冠李戴命中）"""
         factors = []
         if strategy_config and strategy_config.factors:
             factors = [
@@ -935,6 +1135,11 @@ class RunBacktestTool(BaseTool):
             "engine_tag": engine_tag,          # 'real' / 'synthetic'
             "data_end": data_end,              # qlib 日历末日
             "code_version": CODE_VERSION,
+            # 信号源指纹：自定义表达式取 sha1（空串=默认动量），不同表达式互不共享缓存
+            "signal_sha1": (
+                hashlib.sha1(signal_expr.encode("utf-8")).hexdigest()
+                if signal_expr else ""
+            ),
         }
         raw = json.dumps(data, sort_keys=True, ensure_ascii=False)
         return hashlib.sha256(raw.encode()).hexdigest()
@@ -1010,14 +1215,44 @@ class RunBacktestTool(BaseTool):
         constraints: Optional[PortfolioConstraints] = None,
         benchmark: str = "000300.SH",
         commission: Optional[CommissionInfo] = None,
+        signal_expr: str = "",
+        factor_from_selected: int = 0,
     ) -> Trader3Response:
-        """执行回测（M8: 真实 qlib 数据优先 → 向量化合成回退 + 缓存）"""
+        """
+        执行回测（M8: 真实 qlib 数据优先 → 向量化合成回退 + 缓存）。
+
+        信号源（post-audit-5）：
+        - signal_expr 非空：用 evolve GP 语法表达式在真实对齐面板上求值，
+          归一化后替代动量进入同一 pending 权重模拟（仅真实数据路径支持；
+          表达式解析/求值失败或全 NaN → error 响应）。
+        - factor_from_selected > 0：读取 <项目根>/evolve/strategies/selected.json
+          第 N 名因子的 expr 作为 signal_expr（覆盖显式传入的 signal_expr；
+          文件缺失/为空/越界 → error 响应）。
+        - 两者均缺省：走默认 20 日动量逻辑（完全兼容旧行为）。
+
+        缓存：指纹含 signal_expr 的 sha1，不同信号源互不命中。
+        """
+        # ── 信号源解析（先于指纹与缓存；selected.json 加载失败直接报错）──
+        if int(factor_from_selected) > 0:
+            try:
+                signal_expr = _load_expr_from_selected(int(factor_from_selected))
+            except Exception as e:
+                return Trader3Response.error(f"selected.json 因子加载失败: {e}")
+
+        signal_expr = str(signal_expr or "").strip()
+        if signal_expr:
+            try:
+                _prepare_expr(signal_expr)  # 语法预检（快速失败，不做 IO）
+            except _SignalExprError as e:
+                return Trader3Response.error(f"信号表达式错误: {e}")
+
         # 先探测引擎与数据末端，指纹含 engine_tag，避免真实/合成结果串缓存
         engine_tag, data_end = self._probe_engine()
         fp = self._fingerprint(
             strategy_config, universe, start_date, end_date,
             constraints, benchmark, commission,
             engine_tag=engine_tag, data_end=data_end,
+            signal_expr=signal_expr,
         )
 
         cached = self._load_cache(fp)
@@ -1027,9 +1262,19 @@ class RunBacktestTool(BaseTool):
         # M8: 优先真实数据
         try:
             result = self._real_data_backtest(
-                strategy_config, universe, start_date, end_date, constraints, benchmark, commission
+                strategy_config, universe, start_date, end_date, constraints, benchmark, commission,
+                signal_expr=signal_expr,
             )
+        except _SignalExprError as e:
+            # 表达式字段缺失/求值失败/全 NaN —— 明确报错，不静默换信号源
+            return Trader3Response.error(f"信号表达式错误: {e}")
         except Exception as e:
+            if signal_expr:
+                # 自定义表达式依赖真实面板（close/volume 等），合成路径无对应数据，
+                # 静默回退会悄悄丢弃用户的信号定义 → 显式报错
+                return Trader3Response.error(
+                    f"自定义表达式回测需要真实数据面板，真实数据不可用: {e}"
+                )
             # 真实数据不可用 → 回退合成数据
             result = self._vectorized_backtest(
                 strategy_config, universe, start_date, end_date, constraints, benchmark, commission
@@ -1057,11 +1302,14 @@ class RunBacktestTool(BaseTool):
         constraints: Optional[PortfolioConstraints],
         benchmark: str,
         commission: Optional[CommissionInfo] = None,
+        signal_expr: str = "",
     ) -> Trader3Response:
         """
         基于真实 qlib 数据的回测。
 
-        策略：动量因子（20日收益率）选股，月频调仓，等权持有。
+        策略：动量因子（20日收益率）选股，月频调仓，等权持有；
+        signal_expr 非空时以表达式因子（evolve GP 语法，在真实对齐面板上求值）
+        替代动量打分，其余模拟语义不变。
         基准：CSI300 指数（或用户指定）。
         """
         from trader3.data_provider import QlibDataProvider
@@ -1119,13 +1367,28 @@ class RunBacktestTool(BaseTool):
                     bench_returns[i_curr] = (bench_series[i_curr] - bench_series[i_prev]) / bench_series[i_prev]
         benchmark_prices = 100.0 * np.cumprod(1.0 + bench_returns)
 
-        # ── 组合模拟（月频调仓，动量前 n_hold；与合成引擎共用执行语义）──
+        # ── 组合模拟（月频调仓；与合成引擎共用执行语义）──
+        # 信号源：默认 20 日动量；signal_expr 非空时在真实对齐面板上求值表达式因子
         n_hold = min(max(len(codes_list) // 5, 10), 50)
+        score_matrix = None
+        if signal_expr:
+            node = _prepare_expr(signal_expr)
+            expr_fields = _collect_expr_fields(node)
+            close_panel = np.where(close_matrix > 0, close_matrix, np.nan)
+            extra_fields = {f for f in expr_fields if f != "close"}
+            expr_panels: Dict[str, np.ndarray] = {"close": close_panel}
+            if extra_fields:
+                expr_panels.update(
+                    _load_expression_panels(dp, codes_list, time_axis, extra_fields)
+                )
+            score_matrix = _expr_scores(node, expr_panels, valid_flags)
+
         equity, port_returns, turnover_total, positive_days, sim_stats = (
             _run_momentum_backtest(
                 close_matrix, returns_matrix, valid_flags,
                 n_hold=n_hold, max_single_w=0.05,
                 commission=commission, codes=codes_list,
+                score_matrix=score_matrix,
             )
         )
 
@@ -1151,7 +1414,11 @@ class RunBacktestTool(BaseTool):
         )
         caveats = [
             pool_desc,
-            "策略：20日动量因子，月频调仓，等权持有（信号次日生效，无同日前视）",
+            (
+                SIGNAL_SOURCE_CAVEAT_FMT.format(expr=signal_expr)
+                if signal_expr else
+                "策略：20日动量因子，月频调仓，等权持有（信号次日生效，无同日前视）"
+            ),
             "已扣除印花税/佣金/冲击成本",
             "未处理停牌；涨跌停按板块幅度拦截（ST 无法从代码判断，统一按板块幅度处理）",
             ATTRIBUTION_CAVEAT,
@@ -1338,6 +1605,8 @@ class WalkForwardAnalysisTool(BaseTool):
         - qlib 可用：在真实面板上滚动 —— 每窗以训练段动量排名确定等权持仓，
           固定应用于测试段（训练段收盘信息最早测试段首日生效，与回测引擎
           pending 语义一致）；OOS 汇总指标基于拼接的非重叠 OOS 日收益计算。
+        - 测试段首日视为调仓执行日（post-audit-5）：按主循环同款规则扣
+          DEFAULT_COSTS 单边换手成本并套用涨跌停拦截，段内不调仓。
         - step 缺省等于 test_window（OOS 窗口非重叠，显著性不被共享样本抬高）；
           显式传入更小的 step 时 caveats 警告窗口重叠会高估显著性。
         - qlib 不可用：回退种子 123 合成数据，并在 caveats 明示"WFA基于合成数据"。
@@ -1351,10 +1620,12 @@ class WalkForwardAnalysisTool(BaseTool):
         except Exception as e:  # 数据缺失/损坏 → 合成回退
             panel_err = e
 
+        exec_codes: Optional[List[str]] = None
         if panel is not None:
             codes_list, close_matrix, returns_matrix, _valid_flags = panel
             stock_returns = returns_matrix
             factor_scores = _momentum_scores(close_matrix)
+            exec_codes = codes_list  # 涨跌停幅度逐股按板块判定
             engine_caveat = "WFA 基于真实 qlib 数据"
             if eff_step >= test_window:
                 engine_caveat += "，OOS 窗口非重叠"
@@ -1376,7 +1647,8 @@ class WalkForwardAnalysisTool(BaseTool):
 
         (windows, is_returns, oos_returns, is_sharpes, oos_sharpes,
          param_weights, oos_concat) = _run_wfa_rolling(
-            stock_returns, factor_scores, train_window, test_window, eff_step
+            stock_returns, factor_scores, train_window, test_window, eff_step,
+            codes=exec_codes,
         )
 
         # ── 参数稳定性 = 相邻窗口权重相关系数均值 ──
@@ -1421,7 +1693,8 @@ class WalkForwardAnalysisTool(BaseTool):
             engine_caveat,
             f"OOS 汇总基于拼接的{overlap_note} OOS 日收益（共 {int(oos_concat.size)} 个交易日）",
             "每窗以训练段信号确定等权持仓并固定应用于测试段（训练段信息不泄漏至段内收益）",
-            "未计入交易成本与涨跌停约束",
+            "WFA 含单边成本与首日涨跌停约束"
+            "（测试段首日按主循环规则执行建仓并扣 DEFAULT_COSTS 换手成本，段内不调仓）",
             "过拟合概率基于 IS/OOS 夏普比衰减: max(0, 1 - OOS_Sharpe / IS_Sharpe)",
         ]
         if eff_step < test_window:

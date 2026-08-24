@@ -44,12 +44,20 @@ def load_qlib_panel(
     time_axis = cal[start_idx:end_idx]
     T = len(time_axis)
 
-    codes = dp.instruments(universe)[:n_stocks]
+    # 训练窗口末仍在成分内的股票（消除幸存者偏差：不用当前全集回测历史）
+    codes = dp.instruments(universe, asof_date=end)
+    if len(codes) < n_stocks:
+        codes = dp.instruments(universe)  # 成分段未覆盖窗口末时回退并集
     closes = {}
-    for code in codes:
-        close, dates = dp.load_stock(code.lower(), "close", start, end)
+    for code in codes[: max(n_stocks * 3, n_stocks)]:
+        try:
+            close, dates = dp.load_stock(code.lower(), "close", start, end)
+        except Exception:
+            continue  # 退市/坏数据契约违约 → 跳过该股
         if len(close) >= 100:
             closes[code] = (close, dates)
+        if len(closes) >= n_stocks:
+            break
 
     if len(closes) < 20:
         raise RuntimeError(f"可用股票不足 ({len(closes)} < 20)")
