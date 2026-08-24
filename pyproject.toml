@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "trader3"
+version = "0.1.0"
+description = "3号交易员 — 量化交易引擎（双模式：独立运行/嵌入2号分析师）"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+dependencies = [
+    "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "pytest-cov>=4.0",
+]
+qlib = [
+    "qlib>=1.0",
+]
+api = [
+    "fastapi>=0.100",
+    "uvicorn>=0.20",
+    "httpx>=0.24",
+]
+
+[project.scripts]
+trader3 = "trader3.cli:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.setuptools.packages.find]
+include = ["trader3*"]

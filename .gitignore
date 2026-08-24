@@ -1,0 +1,16 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.venv/
+
+# 项目临时与可再生产物
+temp/
+shared_state/backtest_cache/
+data/kline_cache/
+
+# 数据库运行时锁文件
+*.db-wal
+*.db-shm
+*.log

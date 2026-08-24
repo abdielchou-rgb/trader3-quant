@@ -1,0 +1,52 @@
+metadata:
+  name: "核心多因子策略"
+  version: "v2.3"
+  author: "3号交易员"
+  created: "2026-08-11"
+
+universe:
+  type: "index"
+  code: "000905.SH"          # 中证500
+  min_market_cap: 5e8        # 最小流通市值 5亿
+  min_turnover: 1e6          # 最小日均成交额 100万
+
+factors:
+  - name: "momentum_20d"
+    weight: 0.25
+    direction: "long"
+    neutralize: ["industry", "size"]
+  - name: "quality_roe_ttm"
+    weight: 0.20
+    direction: "long"
+    neutralize: ["industry"]
+  - name: "supply_chain_concentration"
+    weight: 0.15
+    direction: "short"
+    neutralize: ["industry"]
+  - name: "earnings_revision_1m"
+    weight: 0.20
+    direction: "long"
+  - name: "regime_timing"
+    weight: 0.20
+    type: "overlay"
+
+constraints:
+  max_single_weight: 0.05
+  max_industry_deviation: 0.10
+  max_style_deviation: 0.15
+  max_turnover_annual: 3.0
+  min_liquidity_buffer: 5
+  long_only: true
+
+risk_model:
+  type: "barra_cne6"
+  frequency: "daily"
+  half_life: 252
+
+optimizer:
+  method: "risk_budget"
+  risk_budget:
+    factor: 0.6
+    specific: 0.4
+  solver: "cvxpy_ecos"
+  max_iter: 1000
