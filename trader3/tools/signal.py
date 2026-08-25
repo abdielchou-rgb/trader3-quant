@@ -1030,15 +1030,21 @@ class ValidateSignalTool(BaseTool):
             from trader3.data_provider import QlibDataProvider
 
             dp = QlibDataProvider()
-            # 取 CSI300 前 n_assets 只股票
-            codes = dp.instruments("csi300")[:n_assets]
+            # 取 CSI300 当前成员（asof=日历末，避免 union 前缀全是退市 relic）
+            cal_last = dp.calendar()[-1]
+            codes = dp.instruments("csi300", asof_date=cal_last)[:n_assets]
+            if len(codes) < 20:
+                codes = dp.instruments("csi300")[:n_assets]
             if len(codes) < 20:
                 return None
 
-            # 逐股建立 date->close 映射（仅有效价）
+            # 逐股建立 date->close 映射（仅有效价）；坏数据契约违约 → 跳过该股
             series = {}
             for code in codes:
-                close, dates = dp.load_stock(code.lower(), "close")
+                try:
+                    close, dates = dp.load_stock(code.lower(), "close")
+                except Exception:
+                    continue
                 if close is None or len(close) == 0:
                     continue
                 dmap = {
@@ -1087,6 +1093,9 @@ class ValidateSignalTool(BaseTool):
 
             return sig_2d, fr_2d, mr
         except Exception:
+            import os as _os, traceback as _tb
+            if _os.environ.get('T3_SIGNAL_DEBUG'):
+                _tb.print_exc()
             return None
 
 
