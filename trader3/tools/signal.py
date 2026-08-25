@@ -1093,7 +1093,8 @@ class ValidateSignalTool(BaseTool):
 
             return sig_2d, fr_2d, mr
         except Exception:
-            import os as _os, traceback as _tb
+            import os as _os
+            import traceback as _tb
             if _os.environ.get('T3_SIGNAL_DEBUG'):
                 _tb.print_exc()
             return None

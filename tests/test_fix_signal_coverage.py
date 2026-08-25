@@ -39,11 +39,15 @@ REGIMES = {
 class _FakeProvider:
     """duck-type QlibDataProvider：instruments / load_stock 由闭包注入。"""
 
-    def __init__(self, instruments_fn=None, load_fn=None):
+    def __init__(self, instruments_fn=None, load_fn=None, calendar=None):
         self._instruments_fn = instruments_fn or (lambda name: [])
         self._load_fn = load_fn or (lambda code, field: (None, []))
+        self._calendar = calendar or []
 
-    def instruments(self, name):
+    def calendar(self):
+        return list(self._calendar)
+
+    def instruments(self, name, **kwargs):
         return self._instruments_fn(name)
 
     def load_stock(self, code, field, *args, **kwargs):
@@ -86,7 +90,11 @@ def _install_panel_env(monkeypatch, n_stocks=22, n_days=110, split_calendar=Fals
 
     monkeypatch.setattr(
         dp_mod, "QlibDataProvider",
-        lambda: _FakeProvider(lambda name: codes if name == "csi300" else [], load),
+        lambda: _FakeProvider(
+            instruments_fn=lambda name, **_: codes if name == "csi300" else [],
+            load_fn=load,
+            calendar=_iso_dates(n_days, 2021),
+        ),
     )
     return codes
 
