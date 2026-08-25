@@ -123,8 +123,15 @@ def _output(result, verbose: bool = False):
 
 
 def _load_json(path: str) -> dict[str, Any]:
-    with open(path, encoding="utf-8") as f:
-        return json.load(f)
+    try:
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+    except OSError as e:
+        print(f"❌ 无法读取文件 {path}: {e}")
+        sys.exit(2)
+    except json.JSONDecodeError as e:
+        print(f"❌ 文件不是合法 JSON: {path} ({e})")
+        sys.exit(2)
 
 
 def _run_backtest(t3, args):
