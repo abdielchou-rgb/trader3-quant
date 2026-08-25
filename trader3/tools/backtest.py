@@ -43,9 +43,23 @@ DEFAULT_N_STOCKS = 50       # 默认股票数
 REBALANCE_FREQ = 21         # 月频调仓
 MAX_UNIVERSE = 150          # 默认股票池上限（超出则确定性抽样）
 DEFAULT_PRICE_LIMIT = 0.098  # 涨跌停幅度默认值（主板；合成数据路径统一使用）
-CODE_VERSION = "post-audit-7"   # 回测代码版本号（参与缓存指纹，逻辑变更时递增；
+CODE_VERSION = "post-audit-8"   # 回测代码版本号（参与缓存指纹，逻辑变更时递增；
+# post-audit-8: 极端情景压测(stress_test)与有效IR折算接入，key_metrics 输出结构变更，
+#               旧缓存作废；
 # post-audit-7: 真实路径接入 Brinson(BHB简化) 行业归因，输出内容变更，旧缓存作废；
 # post-audit-6: 数据内容纪元——治愈尾部拼接修复后旧缓存全部作废）
+
+# 极端情景压力测试窗口（A股历史危机样本；run_stress_test 按 [start,end] 交集筛选）
+STRESS_PERIODS: dict[str, tuple[str, str]] = {
+    "2015_crisis": ("2015-06-15", "2015-09-30"),
+    "2016_circuit_breaker": ("2016-01-04", "2016-02-29"),
+    "2020_covid": ("2020-01-20", "2020-03-31"),
+    "2022_bear": ("2022-01-04", "2022-12-30"),
+    "2024_small_cap_crash": ("2024-01-01", "2024-02-29"),
+}
+STRESS_CAVEAT_FMT = "极端情景压测: {n} 窗口已评估"
+EFFECTIVE_IR_CAVEAT_FMT = "有效IR按调仓频率折算(每{n}天一次独立赌注)"
+STRESS_SUMMARY_NAME = "_summary"
 
 
 def _data_version_stamp() -> str:
@@ -769,6 +783,74 @@ def _compute_metrics(
         # 行业归因与多因子暴露需相应数据库，缺位时以 ATTRIBUTION_CAVEAT 明示而非伪造。
         "period_returns": _classify_period_returns(port_returns, benchmark_prices),
     }
+
+
+# ── 有效 IR 折算（post-audit-8）──
+
+
+def annualized_ir(daily_ir: float, trading_days: int = TRADING_DAYS_PER_YEAR) -> float:
+    """传统年化口径 IR = daily_ir * sqrt(trading_days)。"""
+    return float(daily_ir) * math.sqrt(trading_days)
+
+
+def effective_ir(
+    daily_ir: float,
+    rebalance_days: int,
+    trading_days: int = TRADING_DAYS_PER_YEAR,
+) -> float:
+    """
+    赌注级（bet-level）有效 IR 折算：
+
+    - 独立赌注数 independent_bets = trading_days / rebalance_days；
+    - effective_ir = daily_ir * sqrt(independent_bets)。
+
+    调仓间隔内信号不更新 → 同一持仓期的日度超额收益高度自相关，
+    直接按 sqrt(252) 年化会高估信息比率；按真实独立赌注数折算更保守。
+    rebalance_days 非正时显式报错（不静默吞掉配置错误）。
+    """
+    if int(rebalance_days) <= 0:
+        raise ValueError(f"rebalance_days 必须为正整数，收到 {rebalance_days!r}")
+    independent_bets = float(trading_days) / int(rebalance_days)
+    return float(daily_ir) * math.sqrt(independent_bets)
+
+
+def _daily_information_ratio(
+    port_returns: np.ndarray, market_returns: np.ndarray
+) -> float:
+    """日频 IR = mean(日超额) / std(日超额)；样本不足或零波动返回 0。"""
+    ex = np.asarray(port_returns, dtype=np.float64) - np.asarray(
+        market_returns, dtype=np.float64
+    )
+    if ex.size < 2:
+        return 0.0
+    sd = float(np.std(ex, ddof=1))
+    if sd <= 1e-12:
+        return 0.0
+    return float(np.mean(ex)) / sd
+
+
+def _attach_effective_ir(
+    key_metrics: dict,
+    caveats: list[str],
+    port_returns: np.ndarray,
+    market_returns: np.ndarray,
+    rebalance_days: int,
+) -> None:
+    """
+    回测主路径接入双口径 IR（原地更新 key_metrics / caveats）：
+
+    - "信息比率" ← 传统年化口径 daily_ir*sqrt(252)（键名向后兼容）；
+    - "有效IR(bet级)" ← 按调仓频率折算口径；
+    调仓间隔从 is_rebalance 条件推导：两个回测引擎均为
+    (t == 0) or ((t + 1) % REBALANCE_FREQ == 0)，即每 REBALANCE_FREQ 个
+    交易日产生一次独立调仓赌注。
+    """
+    d_ir = _daily_information_ratio(port_returns, market_returns)
+    key_metrics["信息比率"] = annualized_ir(d_ir)
+    # 向后兼容别名：历史消费者（gates/既有测试）按旧键名 "信息比" 精确取值
+    key_metrics["信息比"] = key_metrics["信息比率"]
+    key_metrics["有效IR(bet级)"] = effective_ir(d_ir, rebalance_days)
+    caveats.append(EFFECTIVE_IR_CAVEAT_FMT.format(n=int(rebalance_days)))
 
 
 # ═══════════════════════════════════════════
@@ -1628,6 +1710,7 @@ class RunBacktestTool(BaseTool):
         top_k_combine: bool = False,
         signal_weights: list[float] | None = None,
         weight_by: str = "",
+        stress_test: bool = False,
     ) -> Trader3Response:
         """
         执行回测（M8: 真实 qlib 数据优先 → 向量化合成回退 + 缓存）。
@@ -1660,6 +1743,11 @@ class RunBacktestTool(BaseTool):
         缓存：指纹含 signal_expr 的 sha1 与 signal_exprs 列表整体的 sha1；
         加权模式下 exprs_sha1 为 (exprs+weights) 联合 json 的 sha1，
         不同信号源/不同权重互不命中。
+
+        stress_test=True（post-audit-8）：额外对 STRESS_PERIODS 中与
+        [start_date, end_date] 有交集的极端窗口逐一回测，结果以 stress_* 前缀
+        键合并进 key_metrics 并追加压测 caveat。压测不参与缓存指纹——
+        缓存始终保存未压测版本，压测层在缓存读取/落盘之后叠加。
         """
         # ── 信号源解析（先于指纹与缓存；selected.json 加载失败直接报错）──
         signal_expr = str(signal_expr or "").strip()
@@ -1757,6 +1845,10 @@ class RunBacktestTool(BaseTool):
 
         cached = self._load_cache(fp)
         if cached is not None:
+            if stress_test:
+                self._apply_stress_results(
+                    cached, universe, start_date, end_date, signal_expr
+                )
             return cached
 
         # M8: 优先真实数据
@@ -1803,8 +1895,52 @@ class RunBacktestTool(BaseTool):
                 f"selected.json 可用因子不足{degraded_k}，降级为{len(expr_list)}条"
             )
 
+        # 缓存先落盘（指纹不含 stress 标志）→ 缓存保存未压测版本，
+        # 压测层只在本次响应上叠加，避免普通调用经缓存带回 stress_* 键
         self._save_cache(fp, result)
+        if stress_test:
+            self._apply_stress_results(
+                result, universe, start_date, end_date, signal_expr
+            )
         return result
+
+    def _apply_stress_results(
+        self,
+        result: Trader3Response,
+        universe: list[str] | None,
+        start_date: str,
+        end_date: str,
+        signal_expr: str = "",
+    ) -> None:
+        """
+        将 run_stress_test 结果合并进响应（原地修改，post-audit-8）：
+
+        - 每个窗口 → key_metrics["stress_{窗口名}_{ann_return|sharpe|max_drawdown|excess}"]；
+        - 汇总行 → "stress_avg_ann" / "stress_worst_window"；
+        - caveats 追加 "极端情景压测: N 窗口已评估"。
+        压测自身异常只记 caveat，不影响主回测结果。
+        """
+        try:
+            rows = run_stress_test(
+                start_date, end_date, universe,
+                signal_expr=signal_expr, _backtest_tool=self,
+            )
+        except Exception as exc:
+            result.caveats.append(f"极端情景压测失败: {type(exc).__name__}: {exc}")
+            return
+        n_windows = 0
+        for row in rows:
+            nm = str(row.get("period_name", ""))
+            if nm == STRESS_SUMMARY_NAME:
+                result.key_metrics["stress_avg_ann"] = float(row["avg_stress_ann"])
+                result.key_metrics["stress_worst_window"] = str(row["worst_window"])
+                continue
+            n_windows += 1
+            result.key_metrics[f"stress_{nm}_ann_return"] = float(row["ann_return"])
+            result.key_metrics[f"stress_{nm}_sharpe"] = float(row["sharpe"])
+            result.key_metrics[f"stress_{nm}_max_drawdown"] = float(row["max_drawdown"])
+            result.key_metrics[f"stress_{nm}_excess"] = float(row["excess"])
+        result.caveats.append(STRESS_CAVEAT_FMT.format(n=n_windows))
 
     # ── M8: 真实 qlib 数据回测 ──
 
@@ -2011,6 +2147,24 @@ class RunBacktestTool(BaseTool):
             caveats.append(bench_caveat)
         if n_skipped:
             caveats.append(f"{n_skipped} 只股票因数据契约校验失败被跳过")
+
+        # ── 有效 IR 双口径（post-audit-8；调仓间隔 = REBALANCE_FREQ，见 _attach_effective_ir）──
+        key_metrics = {
+            "年化收益": report.annual_return,
+            "超额收益": report.excess_return,
+            "夏普比": report.sharpe_ratio,
+            "最大回撤": report.max_drawdown,
+            "信息比率": report.information_ratio,
+            "年化换手": report.annual_turnover,
+            "t统计量": report.t_statistic,
+            **(
+                {"配置效应": br_allocation, "选择效应": br_selection}
+                if brinson_ok else {}
+            ),
+        }
+        _attach_effective_ir(
+            key_metrics, caveats, port_returns, bench_returns, REBALANCE_FREQ
+        )
         return Trader3Response(
             success=True,
             data=report,
@@ -2019,19 +2173,7 @@ class RunBacktestTool(BaseTool):
                 f"夏普 {report.sharpe_ratio:.2f}, 超额 {report.excess_return:.1%}, "
                 f"最大回撤 {report.max_drawdown:.1%}"
             ),
-            key_metrics={
-                "年化收益": report.annual_return,
-                "超额收益": report.excess_return,
-                "夏普比": report.sharpe_ratio,
-                "最大回撤": report.max_drawdown,
-                "信息比": report.information_ratio,
-                "年化换手": report.annual_turnover,
-                "t统计量": report.t_statistic,
-                **(
-                    {"配置效应": br_allocation, "选择效应": br_selection}
-                    if brinson_ok else {}
-                ),
-            },
+            key_metrics=key_metrics,
             charts=[
                 ChartSpec(
                     chart_type="line",
@@ -2114,6 +2256,31 @@ class RunBacktestTool(BaseTool):
         )
 
         name = strategy_config.name if strategy_config else "未命名策略"
+        key_metrics = {
+            "年化收益": report.annual_return,
+            "超额收益": report.excess_return,
+            "夏普比": report.sharpe_ratio,
+            "最大回撤": report.max_drawdown,
+            "信息比率": report.information_ratio,
+            "年化换手": report.annual_turnover,
+            "t统计量": report.t_statistic,
+        }
+        caveats = [
+            "合成数据回测（无 Qlib），实际表现可能差异显著",
+            ATTRIBUTION_CAVEAT,
+            "已扣除千分之一印花税 + 万二佣金 + 千分之五冲击成本",
+            "组合按月频调仓，等权持有",
+            "信号为模拟生成，非真实因子数据",
+            "涨跌停约束已接入（合成路径统一主板幅度 9.8%）",
+        ] + _format_limit_caveats(
+            sim_stats.get("limit_up_blocked", 0),
+            sim_stats.get("limit_down_blocked", 0),
+            sim_stats.get("final_cash_weight", 0.0),
+        )
+        # 合成引擎与真实引擎同款调仓节奏：每 REBALANCE_FREQ 个交易日一次
+        _attach_effective_ir(
+            key_metrics, caveats, port_returns, market_returns, REBALANCE_FREQ
+        )
         return Trader3Response(
             success=True,
             data=report,
@@ -2122,15 +2289,7 @@ class RunBacktestTool(BaseTool):
                 f"夏普 {report.sharpe_ratio:.2f}, 超额 {report.excess_return:.1%}, "
                 f"最大回撤 {report.max_drawdown:.1%}"
             ),
-            key_metrics={
-                "年化收益": report.annual_return,
-                "超额收益": report.excess_return,
-                "夏普比": report.sharpe_ratio,
-                "最大回撤": report.max_drawdown,
-                "信息比": report.information_ratio,
-                "年化换手": report.annual_turnover,
-                "t统计量": report.t_statistic,
-            },
+            key_metrics=key_metrics,
             charts=[
                 ChartSpec(
                     chart_type="line",
@@ -2142,20 +2301,89 @@ class RunBacktestTool(BaseTool):
                     description="策略净值 vs 基准指数",
                 ),
             ],
-            caveats=[
-                "合成数据回测（无 Qlib），实际表现可能差异显著",
-                ATTRIBUTION_CAVEAT,
-                "已扣除千分之一印花税 + 万二佣金 + 千分之五冲击成本",
-                "组合按月频调仓，等权持有",
-                "信号为模拟生成，非真实因子数据",
-                "涨跌停约束已接入（合成路径统一主板幅度 9.8%）",
-            ]
-            + _format_limit_caveats(
-                sim_stats.get("limit_up_blocked", 0),
-                sim_stats.get("limit_down_blocked", 0),
-                sim_stats.get("final_cash_weight", 0.0),
-            ),
+            caveats=caveats,
         )
+
+
+# ═══════════════════════════════════════════
+# 极端情景压力测试（post-audit-8）
+# ═══════════════════════════════════════════
+
+
+def _stress_windows_overlap(
+    a_start: str, a_end: str, b_start: str, b_end: str
+) -> bool:
+    """闭区间日期交集判断（ISO yyyy-mm-dd 字符串序即时间序）。"""
+    return a_start <= b_end and b_start <= a_end
+
+
+def _summarize_stress_rows(rows: list[dict]) -> list[dict]:
+    """
+    追加压测汇总行（纯函数）：
+
+    - avg_stress_ann = 各窗口 ann_return 均值；
+    - worst_window = max_drawdown 最深（最负）窗口名。
+    空输入原样返回。
+    """
+    if not rows:
+        return rows
+    avg_ann = float(np.mean([float(r.get("ann_return", 0.0)) for r in rows]))
+    worst = min(rows, key=lambda r: float(r.get("max_drawdown", 0.0)))
+    return rows + [
+        {
+            "period_name": STRESS_SUMMARY_NAME,
+            "avg_stress_ann": avg_ann,
+            "worst_window": str(worst.get("period_name", "")),
+        }
+    ]
+
+
+def run_stress_test(
+    start_date: str,
+    end_date: str,
+    universe_codes: list[str] | None = None,
+    signal_expr: str = "",
+    **kwargs,
+) -> list[dict]:
+    """
+    极端情景压力测试：对 STRESS_PERIODS 中与 [start_date, end_date] 有交集的
+    每个历史危机窗口分别运行回测，返回逐窗结果 + 汇总行：
+
+    - 逐窗 {period_name, ann_return, sharpe, max_drawdown, excess}；
+    - 汇总行 {"period_name": "_summary", "avg_stress_ann": 各窗口年化均值,
+      "worst_window": 最大回撤最深的窗口名}；
+    与所有窗口无交集时返回空列表。
+
+    kwargs 透传给 RunBacktestTool.execute；内部复用同一工具实例
+    （测试可经 _backtest_tool 注入重定向缓存/桩工具）。
+    """
+    tool: Any = kwargs.pop("_backtest_tool", None)
+    if tool is None:
+        tool = RunBacktestTool()
+    rows: list[dict] = []
+    for period_name, (p_start, p_end) in STRESS_PERIODS.items():
+        if not _stress_windows_overlap(start_date, end_date, p_start, p_end):
+            continue
+        resp = tool.execute(
+            universe=universe_codes,
+            start_date=p_start,
+            end_date=p_end,
+            signal_expr=signal_expr,
+            **kwargs,
+        )
+        report = getattr(resp, "data", None)
+        if not (getattr(resp, "success", False) and report is not None):
+            continue
+        rows.append(
+            {
+                "period_name": period_name,
+                "ann_return": float(report.annual_return),
+                "sharpe": float(report.sharpe_ratio),
+                "max_drawdown": float(report.max_drawdown),
+                "excess": float(report.excess_return),
+            }
+        )
+    return _summarize_stress_rows(rows)
 
 
 # ═══════════════════════════════════════════

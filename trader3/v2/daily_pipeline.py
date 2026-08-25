@@ -135,9 +135,33 @@ def run_paper_trades(triggered_results: list) -> dict:
         trades_today = []
 
     latest_prices: dict[str, float] = {}
+    _daily_pnl_start_equity = acct.total_assets()
+    _max_daily_loss_pct = 0.05     # 日内亏损超5%熔断停止开新仓
+    _max_positions = 20            # 最大持仓只数
+    seen_codes_in_batch: set[str] = set()
+
     for r in triggered_results:
         code = getattr(r, "code", "")
         direction = getattr(r, "direction", "buy")
+
+        # ── 逐笔前置风控（order-level pre-trade checks）──
+        if code in seen_codes_in_batch:
+            logger.info("[风控-前置] %s 同批次重复信号，跳过", code)
+            continue
+        seen_codes_in_batch.add(code)
+
+        equity_now = acct.total_assets()
+        daily_pnl_pct = (equity_now / _daily_pnl_start_equity - 1.0
+                         ) if _daily_pnl_start_equity > 0 else 0.0
+        if (direction == "buy"
+                and daily_pnl_pct < -_max_daily_loss_pct):
+            logger.warning("[风控-熔断] 日内亏损 %.1f%% 超限 %.0f%%，暂停开新仓",
+                           daily_pnl_pct * 100, _max_daily_loss_pct * 100)
+            break
+        if (direction == "buy" and len(acct.stocks) >= _max_positions):
+            logger.warning("[风控-持仓上限] 已达 %d 只，跳过买入", _max_positions)
+            continue
+
         rec = {"code": code,
                "name": str(getattr(r, "reason", ""))[:40],
                "action": direction,
