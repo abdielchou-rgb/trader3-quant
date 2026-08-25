@@ -11,6 +11,9 @@ update_market_data.py — qlib_bin 增量更新管线
       仅处理"bin长度 == 自上市日起交易日数"完全对齐的股票；
       对齐漂移的股票一律跳过并报告（拒绝在未知对齐假设上写数据）。
       停牌日用 0.0 占位（与库内既有约定一致，加载端会剥离首尾0并按 valid_flags 处理内部0）。
+  成分段重建（默认执行，--membership-universe 参数化，失败不阻断）：
+      instruments/<universe>.txt 半年度切分的段末常滞后日历末，
+      导致近期 asof 过滤返回空；拉当前成分把滞后段末延长到日历末并为新成分补段。
 
 安全机制：
   - 默认 dry-run 只打印计划；写入必须 --apply
@@ -58,16 +61,16 @@ def fetch_index_history() -> tuple[list[tuple[str, float]], str]:
     try:
         df = ak.index_zh_a_hist(symbol="000300", period="daily")
         rows = [(str(d)[:10], float(v)) for d, v in
-                zip(df["日期"], df["收盘"]) if float(v) > 0]
+                zip(df["日期"], df["收盘"], strict=False) if float(v) > 0]
         return rows, "eastmoney-index"
     except Exception as e1:
         try:
             df = ak.stock_zh_index_daily(symbol="sh000300")
             rows = [(str(d)[:10], float(v)) for d, v in
-                    zip(df["date"], df["close"]) if float(v) > 0]
+                    zip(df["date"], df["close"], strict=False) if float(v) > 0]
             return rows, "sina-index"
         except Exception as e2:
-            raise RuntimeError(f"指数行情双源失败: {e1} / {e2}")
+            raise RuntimeError(f"指数行情双源失败: {e1} / {e2}") from e2
 
 
 def _normalize_code(code: str) -> str:
@@ -86,15 +89,15 @@ def fetch_stock_close(code: str, start: str) -> list[tuple[str, float]]:
     try:
         df = ak.stock_zh_a_hist(symbol=norm, period="daily",
                                 start_date=start.replace("-", ""), adjust="qfq")
-        return [(str(d)[:10], float(v)) for d, v in zip(df["日期"], df["收盘"])
-                if float(v) > 0]
+        return [(str(d)[:10], float(v)) for d, v in
+                zip(df["日期"], df["收盘"], strict=False) if float(v) > 0]
     except Exception:
         pass
     prefix = "sh" if norm.startswith("6") else ("bj" if norm.startswith(("4", "8", "9")) else "sz")
     df = ak.stock_zh_a_daily(symbol=prefix + norm,
                              start_date=start.replace("-", ""), adjust="qfq")
-    return [(str(d)[:10], float(v)) for d, v in zip(df["date"], df["close"])
-            if float(v) > 0]
+    return [(str(d)[:10], float(v)) for d, v in
+            zip(df["date"], df["close"], strict=False) if float(v) > 0]
 
 
 # ── bin 读写 ────────────────────────────────────────────
@@ -394,6 +397,125 @@ def apply_stock_append(dp, plans: list[dict], fetch_start: str, backup_root: str
     return {"appended": done, "skipped": skipped}
 
 
+# ── 成分段重建 ──────────────────────────────────────────
+
+_UNIVERSE_SYMBOL = {
+    "csi300": "000300",
+    "csi500": "000905",
+    "csi800": "000906",
+    "csi1000": "000852",
+}
+
+
+def fetch_constituents(universe: str = "csi300") -> set[str]:
+    """拉取指数当前成分裸码集合；主源中证官网、备源新浪，双源降级。
+
+    接口实测（akshare 1.18.81）：
+      index_stock_cons_csindex(symbol="000300") → 列含 "成分券代码"（裸 6 位码）
+      index_stock_cons(symbol="000300")         → 列含 "品种代码"
+    """
+    import akshare as ak
+
+    symbol = _UNIVERSE_SYMBOL.get(universe)
+    if not symbol:
+        raise ValueError(f"未支持的 universe: {universe}")
+    try:
+        df = ak.index_stock_cons_csindex(symbol=symbol)
+        codes = {str(c).strip().zfill(6) for c in df["成分券代码"]}
+    except Exception as e1:
+        try:
+            df = ak.index_stock_cons(symbol=symbol)
+            codes = {str(c).strip().zfill(6) for c in df["品种代码"]}
+        except Exception as e2:
+            raise RuntimeError(f"成分接口双源失败({universe}): {e1} / {e2}") from e2
+    return {c for c in codes if len(c) == 6 and c.isdigit()}
+
+
+def _prefixed_code(bare: str) -> str:
+    """裸码 → 库内 instrument 命名（与 fetch_stock_close 前缀约定一致）。"""
+    if bare.startswith("6"):
+        return "SH" + bare
+    if bare.startswith(("4", "8", "9")):
+        return "BJ" + bare
+    return "SZ" + bare
+
+
+def refresh_membership(dp, universe: str = "csi300", cal_last: str = "") -> dict:
+    """
+    成分段尾部重建：把 instruments/<universe>.txt 的滞后段末对齐日历末。
+
+    data_qc 实跑发现：半年度切分的段末滞后日历末约一个月，
+    导致 instruments(universe, asof_date=近期) 返回空。规则：
+      - 段末 == max_end 的当前成分 → 段 end 延长至 cal_last
+      - 文件中不存在的新成分      → 追加 [max_end后首个交易日, cal_last]（保守起点）
+      - 末段早于 max_end / 非当前成分 → 一律不动（历史成员保留）
+    原子写（tmp+os.replace），写前备份到 <data_dir>/_backup_<ts>/。
+    """
+    import bisect
+
+    inst_path = os.path.join(dp.data_dir, "instruments", f"{universe}.txt")
+    if not os.path.exists(inst_path):
+        raise FileNotFoundError(f"成分文件不存在: {inst_path}")
+    cal = list(dp.calendar())
+    if not cal_last:
+        cal_last = cal[-1]
+
+    cons_now = fetch_constituents(universe)
+
+    with open(inst_path, encoding="utf-8") as f:
+        orig_lines = [ln for ln in f.read().splitlines() if ln.strip()]
+    parsed: list[list[str]] = []
+    ends: list[str] = []
+    seen_bare: set[str] = set()
+    for ln in orig_lines:
+        parts = ln.split("\t") if "\t" in ln else ln.split()
+        code = parts[0].upper()
+        start = parts[1] if len(parts) > 1 and parts[1] else "1900-01-01"
+        end = parts[2] if len(parts) > 2 and parts[2] else "2999-12-31"
+        parsed.append([code, start, end])
+        ends.append(end)
+        seen_bare.add(_normalize_code(code))
+
+    stats = {"universe": universe, "cal_last": cal_last,
+             "max_end": max(ends), "cons_n": len(cons_now),
+             "extended": [], "appended": [], "changed": False}
+    if stats["max_end"] >= cal_last:
+        stats["status"] = "fresh"
+        return stats
+    max_end = stats["max_end"]
+
+    seg_start_idx = bisect.bisect_right(cal, max_end)
+    seg_start = cal[seg_start_idx] if seg_start_idx < len(cal) else cal_last
+
+    new_parsed = [list(p) for p in parsed]
+    extended_bares: set[str] = set()
+    for p in new_parsed:
+        bare = _normalize_code(p[0])
+        if bare in cons_now and p[2] == max_end:
+            p[2] = cal_last
+            if bare not in extended_bares:
+                stats["extended"].append(p[0])
+                extended_bares.add(bare)
+    for bare in sorted(cons_now - seen_bare):
+        code = _prefixed_code(bare)
+        new_parsed.append([code, seg_start, cal_last])
+        stats["appended"].append(code)
+
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    backup_dir = os.path.join(dp.data_dir, f"_backup_{ts}")
+    _backup([inst_path], backup_dir, dp.data_dir)
+
+    tmp = inst_path + ".tmp"
+    with open(tmp, "w", encoding="utf-8", newline="\n") as f:
+        f.write("\n".join("\t".join(p) for p in new_parsed) + "\n")
+    os.replace(tmp, inst_path)
+
+    stats.update({"changed": True, "status": "rebuilt",
+                  "seg_start_new": seg_start, "backup_dir": backup_dir,
+                  "lines_after": len(new_parsed)})
+    return stats
+
+
 # ── 主流程 ──────────────────────────────────────────────
 
 def main():
@@ -402,16 +524,18 @@ def main():
     ap.add_argument("--stocks", action="store_true", help="同时处理成分股严格追加")
     ap.add_argument("--limit", type=int, default=0, help="限制处理股票数（调试）")
     ap.add_argument("--data-dir", default="", help="覆盖 qlib 数据目录（测试用）")
+    ap.add_argument("--membership-universe", default="csi300",
+                    help="成分段重建的指数 universe（默认 csi300）")
     ap.add_argument("--no-version-stamp", action="store_true", help="成功后不写 data_version")
     args = ap.parse_args()
 
     dp = _dp(args.data_dir)
-    print("[1/5] 抓取指数行情 ...")
+    print("[1/6] 抓取指数行情 ...")
     rows, source = fetch_index_history()
     print(f"      来源={source} 条数={len(rows)} 末条={rows[-1]}")
 
     plan = plan_index(dp, rows)
-    print(f"[2/5] 计划: 日历 {plan['cal_len']}({plan['cal_last']}) → {plan['new_cal_len']}"
+    print(f"[2/6] 计划: 日历 {plan['cal_len']}({plan['cal_last']}) → {plan['new_cal_len']}"
           f"，新增 {len(plan['new_tail_days'])} 个交易日")
     if plan["interior_missing"]:
         print(f"      ⚠ 抓取数据中有 {len(plan['interior_missing'])} 个早于现日历末的缺失日（忽略，不影响追加以外的重建）")
@@ -423,7 +547,7 @@ def main():
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     backup_root = os.path.join(dp.data_dir, f"_backup_{ts}")
 
-    print("[3/5] 指数重建（含备份+失败自动回滚）...")
+    print("[3/6] 指数重建（含备份+失败自动回滚）...")
     result = apply_index(dp, rows, plan, backup_root)
     ok, msg = verify_index(dp, rows, result["new_cal_len"],
                            expect_bin_len=result.get("expected_bin_len"))
@@ -432,6 +556,23 @@ def main():
         print(f"      ✗ 校验失败已回滚: {msg}")
         return 2
     print(f"      ✓ {result['written_fields']}")
+
+    # 成分段尾部对齐：成分文件段末常滞后日历末（半年度切分），
+    # 否则 instruments(asof_date=近期) 返回空。失败仅告警不阻断。
+    print("[4/6] 成分段重建（对齐日历末，防近期 asof 过滤为空）...")
+    try:
+        from trader3.data_provider import QlibDataProvider
+        ms_dp = QlibDataProvider(data_dir=dp.data_dir)
+        ms_cal_last = plan["new_tail_days"][-1] if plan["new_tail_days"] else plan["cal_last"]
+        ms = refresh_membership(ms_dp, universe=args.membership_universe,
+                                cal_last=ms_cal_last)
+        if ms.get("changed"):
+            print(f"      ✓ 延长 {len(ms['extended'])} 段 | 新增成分 {len(ms['appended'])}"
+                  f" | 新段起点 {ms['seg_start_new']} | 备份: {ms['backup_dir']}")
+        else:
+            print(f"      ✓ 成分段已覆盖至 {ms['max_end']}（≥ {ms['cal_last']}），无需更新")
+    except Exception as e:
+        print(f"      ⚠ 成分段刷新失败（不阻断主流程）: {e}")
 
     stock_summary = {"appended": [], "skipped": []}
     if args.stocks:
@@ -444,7 +585,7 @@ def main():
             codes_all = dp_fresh.instruments("csi300")
         if args.limit:
             codes_all = codes_all[:args.limit]
-        print(f"[4/5] 成分股严格追加（候选 {len(codes_all)}，含漂移治愈）...")
+        print(f"[5/6] 成分股严格追加（候选 {len(codes_all)}，含漂移治愈）...")
         sp = plan_stocks(dp_fresh, codes_all)
         # 抓取窗口：回溯约 60 个交易日，足以覆盖尾部治愈需求
         fetch_start = dp_fresh.calendar()[max(0, len(dp_fresh.calendar()) - 60)]
@@ -458,7 +599,7 @@ def main():
               f"需重建 {n_rebuild} | 超长异常 {n_overlong} | "
               f"其他 {len(reasons) - n_latest - n_rebuild - n_overlong}")
     else:
-        print("[4/5] 跳过成分股（未指定 --stocks）")
+        print("[5/6] 跳过成分股（未指定 --stocks）")
 
     if not args.no_version_stamp:
         try:
@@ -468,11 +609,11 @@ def main():
                 "qlib_bin": new_last,
                 "updated_by": "update_market_data",
             })
-            print(f"[5/5] data_version 已盖章: qlib_bin={new_last}（Gate6 恢复判别力）")
+            print(f"[6/6] data_version 已盖章: qlib_bin={new_last}（Gate6 恢复判别力）")
         except Exception as e:
-            print(f"[5/5] ⚠ data_version 写入失败: {e}")
+            print(f"[6/6] ⚠ data_version 写入失败: {e}")
     else:
-        print("[5/5] 跳过 data_version")
+        print("[6/6] 跳过 data_version")
 
     print("✅ 完成。备份保留于:", backup_root)
     return 0

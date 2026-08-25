@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 _TIMEOUT_SECONDS = 15
 
 
-def _send_serverchan(title: str, content: str) -> dict[str, str]:
+def _send_serverchan(title: str, content: str) -> dict[str, object]:
     key = os.environ.get("SC_SEND_KEY", "").strip()
     if not key:
         return {"channel": "serverchan", "ok": False, "detail": "SC_SEND_KEY 未设置"}
@@ -38,7 +38,7 @@ def _send_serverchan(title: str, content: str) -> dict[str, str]:
     return {"channel": "serverchan", "ok": ok, "detail": f"http {resp.status_code}"}
 
 
-def _send_smtp(title: str, content: str) -> dict[str, str]:
+def _send_smtp(title: str, content: str) -> dict[str, object]:
     host = os.environ.get("SMTP_HOST", "").strip()
     user = os.environ.get("SMTP_USER", "").strip()
     password = os.environ.get("SMTP_PASS", "").strip()

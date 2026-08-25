@@ -62,4 +62,7 @@ files = [
     "trader3/data_provider.py",
     "trader3/models.py",
     "trader3/shared_state.py",
+    "trader3/base_tool.py",
+    "trader3/tools/execution.py",
+    "trader3/notify.py",
 ]

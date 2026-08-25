@@ -632,10 +632,10 @@ def _fit_hmm(data: dict[str, np.ndarray]) -> tuple[str, dict[str, float], float]
         state_probs = model.predict_proba(X)
         current_probs = state_probs[-1]
     else:
-        # Fallback to custom implementation
+        # Fallback to custom implementation（特征列数随量能数据有无自适应）
         model = _CustomGaussianHMM(
             n_states=HMM_N_STATES,
-            n_features=HMM_N_FEATURES,
+            n_features=X.shape[1],
             random_state=SEED_REGIME,
             n_iter=HMM_N_ITER,
         )
@@ -729,10 +729,6 @@ def _rule_based_regime(
 
     # Rolling volatility
     rolling_vol = np.std(returns[-20:]) * math.sqrt(TRADING_DAYS)
-
-    # Volume relative to 20d average
-    avg_volume_20 = np.mean(volumes[-20:]) if T >= 20 else np.mean(volumes)
-    current_volume = volumes[-1]
 
     # Scoring
     scores = {
@@ -1071,12 +1067,13 @@ class ValidateSignalTool(BaseTool):
 
             for j, (_code, dmap) in enumerate(series.items()):
                 recent = np.array([dmap[d] for d in window], dtype=np.float64)
-                # 动量: log(c_t / c_{t-20})
+                # 动量: log(c_t / c_{t-20})，t 取 [21, len-1]
                 mom = np.log(recent[21:] / recent[:-21])
-                # 次日收益，与动量对齐：动量在第 t 天，收益为 t→t+1
+                # 次日收益 ret[k] = c_{k+1}/c_k - 1；动量日 d=21+j 的次日收益 = ret[21+j]
+                # 末日动量的次日收益越界 → 丢弃最后一期动量，sig/fr 严格等长对齐
                 ret = recent[1:] / recent[:-1] - 1.0
                 fr = ret[21:]
-                n = min(len(mom), n_periods)
+                n = min(len(mom) - 1, n_periods)
                 sig_2d[:n, j] = mom[-n:]
                 fr_2d[:n, j] = fr[-n:]
 

@@ -77,11 +77,11 @@ class EstimateTransactionCostTool(BaseTool):
     tool_version = "3.0.0"
     tool_category = "execution"
 
-    def execute(
+    def execute(  # type: ignore[override]
         self,
-        orders: list[dict] = None,
+        orders: list[dict] | None = None,
         method: str = "implementation_shortfall",
-        market_data: dict = None,
+        market_data: dict | None = None,
     ) -> Trader3Response:
         """Almgren-Chriss 驱动交易成本估算"""
         if not orders:
@@ -243,14 +243,14 @@ class GenerateExecutionPlanTool(BaseTool):
     tool_version = "3.0.0"
     tool_category = "execution"
 
-    def execute(
+    def execute(  # type: ignore[override]
         self,
-        target_weights: dict[str, float] = None,
-        current_weights: dict[str, float] = None,
+        target_weights: dict[str, float] | None = None,
+        current_weights: dict[str, float] | None = None,
         algorithm: str = "adaptive_vwap",
         urgency: str = "normal",
         portfolio_value: float = 10_000_000.0,
-        market_data: dict = None,
+        market_data: dict | None = None,
     ) -> Trader3Response:
         """生成执行计划"""
         target_weights = target_weights or {}
@@ -283,8 +283,6 @@ class GenerateExecutionPlanTool(BaseTool):
                 f"预期成本 {plan.expected_total_cost_bp:.0f}bp"
             ),
             key_metrics={
-                "算法": algorithm,
-                "紧急度": urgency,
                 "切片数": len(plan.slices),
                 "预期完成率": plan.expected_completion_rate,
                 "预期成本(bp)": plan.expected_total_cost_bp,
@@ -455,8 +453,8 @@ class GenerateExecutionPlanTool(BaseTool):
     @staticmethod
     def _estimate_plan_cost(
         urgency: str,
-        orders: list[dict] = None,
-        market_data: dict = None,
+        orders: list[dict] | None = None,
+        market_data: dict | None = None,
     ) -> float:
         """计划成本 = 佣金/印花税底仓 + 冲击成本（随参与率平方根增长）+ 紧急度罚项"""
         penalty = {"high": 10.0, "normal": 0.0, "low": -3.0}.get(urgency, 0.0)
