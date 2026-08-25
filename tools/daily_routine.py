@@ -6,6 +6,7 @@ import argparse
 import json
 import os
 import subprocess
+import sys
 from datetime import datetime
 
 PROJECT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
@@ -101,7 +102,52 @@ def main():
     print(f"\n📄 日报: {daily_path}")
     print(f"📊 今日策略: {json.dumps(strategies_today, ensure_ascii=False)}")
 
-    # Step 5: 推送通知（未配置通道时仅日志，不阻断）
+    # Step 5: 因子衰减监控（F1）+ 纸面 vs 基线对照；失败不阻断
+    watch_lines = []
+    try:
+        sys.path.insert(0, PROJECT)
+        from trader3.v2.factor_watch import append_ic_history, compute_ic_series
+
+        ic = compute_ic_series(lookback_days=260)
+        last_date = ic["dates"][-1] if ic["dates"] else today
+        rec = {"last_date": last_date,
+               "ic_last": ic["ic_series"][-1] if ic["ic_series"] else None}
+        st = append_ic_history(os.path.join(PROJECT, "shared_state"),
+                               "f1", rec, decay_window=20)
+        results["factor_watch"] = {"ic_mean_recent": st["ic_mean_recent"],
+                                   "alert": st["alert"]}
+        watch_lines.append(
+            f"F1 近20日IC均值 {st['ic_mean_recent']}"
+            + (" ⚠衰减告警" if st["alert"] else "")
+        )
+    except Exception as e:
+        print(f"  ⚠ 因子监控失败(不阻断): {e}")
+
+    anchor_line = ""
+    try:
+        acct_path = os.path.join(PROJECT, "shared_state", "paper", "account.json")
+        base_path = os.path.join(PROJECT, "docs", "baseline", "baseline_results.json")
+        if os.path.exists(acct_path) and os.path.exists(base_path):
+            with open(acct_path, encoding="utf-8") as f:
+                acct = json.load(f)
+            with open(base_path, encoding="utf-8") as f:
+                base = json.load(f)
+            init = acct.get("initial_cash") or 0
+            eq = acct.get("equity") or 0
+            if init > 0 and eq > 0:
+                cum = eq / init - 1.0
+                f1_ann = ((base.get("strategies", {}).get("S2_F1_vwap_gap", {})
+                           .get("periods", {}).get("OOS", {}).get("metrics", {})
+                           .get("年化收益")) or 0.234)
+                daily_anchor = (1 + f1_ann) ** (1 / 244) - 1
+                watch_lines.append(
+                    f"纸面累计 {cum:+.2%} vs F1基线日均锚 {daily_anchor:+.3%}"
+                )
+                anchor_line = f"\n对照: 纸面累计 {cum:+.2%}（F1 日均锚 {daily_anchor:+.3%}）"
+    except Exception as e:
+        print(f"  ⚠ 基线对照失败(不阻断): {e}")
+
+    # Step 6: 推送通知（未配置通道时仅日志，不阻断）
     try:
         sys.path.insert(0, PROJECT)
         from trader3.notify import send_notification
@@ -111,9 +157,11 @@ def main():
             f"- {k}: {'✓' if v.get('ok') else '✗'} {str(v.get('output', ''))[:80]}"
             for k, v in results["tasks"].items()
         )
+        extra = ("\n\n" + "\n".join(watch_lines)) if watch_lines else ""
         send_notification(
             f"3号交易员日报 {today}（{n_ok}/{len(results['tasks'])} 任务成功）",
-            f"{brief}\n\n策略: {json.dumps(strategies_today, ensure_ascii=False)[:800]}",
+            f"{brief}{extra}{anchor_line}\n\n策略: "
+            f"{json.dumps(strategies_today, ensure_ascii=False)[:600]}",
         )
     except Exception as e:
         print(f"  ⚠ 通知推送失败(不阻断): {e}")

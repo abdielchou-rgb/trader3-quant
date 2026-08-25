@@ -842,18 +842,39 @@ def _expr_zscores(
     return np.where(np.isfinite(z), z, np.nan)
 
 
-def _combine_factor_scores(score_stack: np.ndarray) -> np.ndarray:
+def _combine_factor_scores(
+    score_stack: np.ndarray,
+    weights: list[float] | np.ndarray | None = None,
+) -> np.ndarray:
     """
-    K 个因子分数堆栈 (K,T,N) → 等权合成 (T,N)。
+    K 个因子分数堆栈 (K,T,N) → 合成 (T,N)。
 
-    - NaN 跳过后按当日可用因子数归一（等权平均的 NaN 安全版）；
+    - weights=None：等权合成 —— NaN 跳过后按当日可用因子数归一；
+    - weights 给定：先归一化 w/Σw，再按各层权重加权合成；
+      NaN 跳过、按当日可用因子的权重和归一（等权语义的自然推广，
+      全因子可用时退化为加权平均）；
     - 任一日全部因子无效 → 该日分数为 NaN（调用方选股时视为 -inf 排除）。
+
+    Raises
+    ------
+    ValueError — weights 长度与因子数不符 / 之和为 0 或非有限。
     """
+    k = score_stack.shape[0]
+    if weights is None:
+        w = np.full(k, 1.0 / max(k, 1), dtype=np.float64)
+    else:
+        w = np.asarray(weights, dtype=np.float64).ravel()
+        if w.shape[0] != k:
+            raise ValueError(f"weights 长度 ({w.shape[0]}) 与因子数 ({k}) 不一致")
+        total = float(np.sum(w))
+        if not math.isfinite(total) or abs(total) < 1e-12:
+            raise ValueError("weights 之和为 0 或非有限，无法归一化")
+        w = w / total
     finite = np.isfinite(score_stack)
-    counts = finite.sum(axis=0)
-    sums = np.where(finite, score_stack, 0.0).sum(axis=0)
-    combined = np.full(counts.shape, np.nan, dtype=np.float64)
-    np.divide(sums, counts, out=combined, where=counts > 0)
+    denom = np.where(finite, w[:, None, None], 0.0).sum(axis=0)
+    numer = np.where(finite, score_stack * w[:, None, None], 0.0).sum(axis=0)
+    combined = np.full(denom.shape, np.nan, dtype=np.float64)
+    np.divide(numer, denom, out=combined, where=denom > 0)
     return combined
 
 
@@ -931,6 +952,35 @@ def _load_topk_exprs_from_selected(k: int) -> list[str]:
             f"（实际 {len(exprs)} 个），无法多因子等权合成"
         )
     return exprs
+
+
+def _load_icir_weights_from_selected(exprs: list[str]) -> list[float]:
+    """
+    ICIR 加权模式：按表达式精确匹配读取 selected.json 条目的 gates.icir.value，
+    返回 |icir| 权重列表（顺序与入参 exprs 一致）。
+
+    Raises
+    ------
+    ValueError — selected.json 缺失/非法，或任一表达式缺少对应 icir 门禁值
+                 （报错文案: "selected.json 缺少 <expr> 的 icir"，execute 层转 error 响应）。
+    """
+    entries = _read_selected_entries()
+    icir_map: dict[str, float] = {}
+    for en in entries:
+        ex = _entry_expr(en)
+        if not ex:
+            continue
+        gates = en.get("gates") if isinstance(en, dict) else None
+        g = gates.get("icir") if isinstance(gates, dict) else None
+        val = g.get("value") if isinstance(g, dict) else None
+        if isinstance(val, (int, float)) and math.isfinite(float(val)):
+            icir_map[ex] = float(val)
+    weights: list[float] = []
+    for ex in exprs:
+        if ex not in icir_map:
+            raise ValueError(f"selected.json 缺少 {ex} 的 icir")
+        weights.append(abs(icir_map[ex]))
+    return weights
 
 
 def _build_aligned_panel(dp: Any, codes: list[str], start_date: str, end_date: str) -> tuple[
@@ -1304,6 +1354,7 @@ class RunBacktestTool(BaseTool):
         data_end: str = "",
         signal_expr: str = "",
         signal_exprs: list[str] | None = None,
+        signal_weights: list[float] | None = None,
     ) -> str:
         """sha256 策略指纹（含 constraints/引擎标识/数据末端/代码版本/信号表达式，防张冠李戴命中）"""
         factors = []
@@ -1313,6 +1364,21 @@ class RunBacktestTool(BaseTool):
                 for f in strategy_config.factors
             ]
         exprs = [str(e) for e in (signal_exprs or [])]
+        weights = [float(w) for w in (signal_weights or [])]
+        # 多因子合成指纹：加权时对 (exprs+weights) 联合 json 取 sha1（不同权重互不共享缓存）；
+        # 等权模式保持 exprs 列表整体 sha1 不变
+        if exprs and weights:
+            joint_payload = json.dumps(
+                {"exprs": exprs, "weights": weights}, ensure_ascii=False
+            )
+            exprs_sha1 = hashlib.sha1(joint_payload.encode("utf-8")).hexdigest()
+        else:
+            exprs_sha1 = (
+                hashlib.sha1(
+                    json.dumps(exprs, ensure_ascii=False).encode("utf-8")
+                ).hexdigest()
+                if exprs else ""
+            )
         data = {
             "strategy": strategy_config.name if strategy_config else "default",
             "factors": factors,
@@ -1332,13 +1398,8 @@ class RunBacktestTool(BaseTool):
                 hashlib.sha1(signal_expr.encode("utf-8")).hexdigest()
                 if signal_expr else ""
             ),
-            # 多因子合成指纹：exprs 列表（有序）整体 sha1
-            "exprs_sha1": (
-                hashlib.sha1(
-                    json.dumps(exprs, ensure_ascii=False).encode("utf-8")
-                ).hexdigest()
-                if exprs else ""
-            ),
+            # 多因子合成指纹：exprs 列表（有序）整体 sha1（加权模式见上方联合指纹）
+            "exprs_sha1": exprs_sha1,
         }
         raw = json.dumps(data, sort_keys=True, ensure_ascii=False)
         return hashlib.sha256(raw.encode()).hexdigest()
@@ -1418,6 +1479,8 @@ class RunBacktestTool(BaseTool):
         factor_from_selected: int = 0,
         signal_exprs: list[str] | None = None,
         top_k_combine: bool = False,
+        signal_weights: list[float] | None = None,
+        weight_by: str = "",
     ) -> Trader3Response:
         """
         执行回测（M8: 真实 qlib 数据优先 → 向量化合成回退 + 缓存）。
@@ -1426,19 +1489,30 @@ class RunBacktestTool(BaseTool):
         1. signal_expr 非空：单表达式模式 —— evolve GP 语法表达式在真实对齐面板上
            求值，归一化后替代动量进入同一 pending 权重模拟（仅真实数据路径支持；
            表达式解析/求值失败或全 NaN → error 响应）。此时忽略
-           signal_exprs / factor_from_selected / top_k_combine。
-        2. 否则 signal_exprs 非空：多因子等权合成模式 —— 每个表达式在同一面板上
-           求值并逐日横截面 z-score，NaN 跳过按可用因子数归一合成；caveat 标注
-           "多因子等权合成: K=<N> 个表达式"。
+           signal_exprs / signal_weights / weight_by / factor_from_selected /
+           top_k_combine。
+        2. 否则 signal_exprs 非空：多因子合成模式 —— 每个表达式在同一面板上求值并
+           逐日横截面 z-score，NaN 跳过按可用因子（权重）归一合成：
+           - 无权重参数 → 等权合成，caveat "多因子等权合成: K=<N> 个表达式"；
+           - signal_weights 显式给定（长度须等于 exprs）→ 加权合成，
+             caveat "多因子加权合成: K=<N>, weights=[...]"；
+           - weight_by="icir" → 从 selected.json 按 expr 精确匹配读取
+             gates.icir.value，以 |icir| 为权重做加权合成。
         3. 否则 top_k_combine=True：读 selected.json 前 N 名做合成
            （N=factor_from_selected>0 时取之，否则默认 3；文件缺失或可用 expr
-           不足 2 个 → error 响应）。
+           不足 2 个 → error 响应）。weight_by="icir" 时对前 N 名自动做 icir
+           加权合成（主用例）；否则等权。
         4. 否则 factor_from_selected>0：读取 selected.json 第 N 名因子的 expr 作为
            单表达式（文件缺失/为空/越界 → error 响应）。
         5. 均缺省：走默认 20 日动量逻辑（完全兼容旧行为）。
 
-        缓存：指纹含 signal_expr 的 sha1 与 signal_exprs 列表整体的 sha1，
-        不同信号源互不命中。
+        权重校验（先于指纹与缓存）：signal_weights 与 weight_by 互斥；
+        长度不符/非有限值/和为 0、weight_by 设置但既无 signal_exprs 也非
+        top_k_combine 组合、selected.json 缺 icir 条目 → 一律 error 响应。
+
+        缓存：指纹含 signal_expr 的 sha1 与 signal_exprs 列表整体的 sha1；
+        加权模式下 exprs_sha1 为 (exprs+weights) 联合 json 的 sha1，
+        不同信号源/不同权重互不命中。
         """
         # ── 信号源解析（先于指纹与缓存；selected.json 加载失败直接报错）──
         signal_expr = str(signal_expr or "").strip()
@@ -1473,6 +1547,50 @@ class RunBacktestTool(BaseTool):
             except Exception as e:
                 return Trader3Response.error(f"selected.json 因子加载失败: {e}")
 
+        # ── 合成权重解析（先于指纹与缓存；显式 signal_weights 与派生 weight_by 互斥）──
+        weights_list: list[float] | None = None
+        weight_by_norm = str(weight_by or "").strip().lower()
+        if weight_by_norm and weight_by_norm != "icir":
+            return Trader3Response.error(
+                f"不支持的 weight_by={weight_by}（当前仅支持 'icir'）"
+            )
+        if signal_weights is not None:
+            if weight_by_norm:
+                return Trader3Response.error(
+                    "signal_weights 与 weight_by 互斥，请只指定其一"
+                )
+            if not expr_list:
+                return Trader3Response.error(
+                    "signal_weights 仅在 signal_exprs 多因子合成模式下生效"
+                )
+            try:
+                cand = [float(w) for w in signal_weights]
+            except (TypeError, ValueError):
+                return Trader3Response.error("signal_weights 含非数值元素")
+            if len(cand) != len(expr_list):
+                return Trader3Response.error(
+                    f"signal_weights 长度 ({len(cand)}) 与 "
+                    f"signal_exprs 数量 ({len(expr_list)}) 不一致"
+                )
+            if any(not math.isfinite(w) for w in cand):
+                return Trader3Response.error("signal_weights 含非有限值 (NaN/inf)")
+            if abs(sum(cand)) < 1e-12:
+                return Trader3Response.error("signal_weights 之和为 0，无法归一化")
+            weights_list = cand
+        elif weight_by_norm == "icir":
+            # 仅适用于 signal_exprs 多因子模式或 top_k_combine 前 K 名组合（主用例）
+            if not expr_list:
+                return Trader3Response.error(
+                    "weight_by='icir' 仅适用于 signal_exprs 或 "
+                    "top_k_combine 组合模式"
+                )
+            try:
+                weights_list = _load_icir_weights_from_selected(expr_list)
+            except ValueError as e:
+                return Trader3Response.error(str(e))
+            except Exception as e:
+                return Trader3Response.error(f"selected.json icir 权重加载失败: {e}")
+
         # 先探测引擎与数据末端，指纹含 engine_tag，避免真实/合成结果串缓存
         engine_tag, data_end = self._probe_engine()
         fp = self._fingerprint(
@@ -1480,6 +1598,7 @@ class RunBacktestTool(BaseTool):
             constraints, benchmark, commission,
             engine_tag=engine_tag, data_end=data_end,
             signal_expr=signal_expr, signal_exprs=expr_list,
+            signal_weights=weights_list,
         )
 
         cached = self._load_cache(fp)
@@ -1491,6 +1610,7 @@ class RunBacktestTool(BaseTool):
             result = self._real_data_backtest(
                 strategy_config, universe, start_date, end_date, constraints, benchmark, commission,
                 signal_expr=signal_expr, signal_exprs=expr_list,
+                signal_weights=weights_list,
             )
         except _SignalExprError as e:
             # 表达式字段缺失/求值失败/全 NaN —— 明确报错，不静默换信号源
@@ -1531,14 +1651,16 @@ class RunBacktestTool(BaseTool):
         commission: CommissionInfo | None = None,
         signal_expr: str = "",
         signal_exprs: list[str] | None = None,
+        signal_weights: list[float] | None = None,
     ) -> Trader3Response:
         """
         基于真实 qlib 数据的回测。
 
         策略：动量因子（20日收益率）选股，月频调仓，等权持有；
         signal_expr 非空时以单表达式因子替代动量打分；
-        signal_exprs 非空时逐表达式求值并逐日横截面 z-score 等权合成
-        （无效处置 NaN 跳过、按可用因子数归一；全无效日分数 NaN → 选股 -inf 排除）；
+        signal_exprs 非空时逐表达式求值并逐日横截面 z-score 合成
+        （无效处置 NaN 跳过、按可用因子权重归一；全无效日分数 NaN → 选股 -inf 排除；
+        signal_weights 给定时按 w/Σw 加权替代等权）；
         其余模拟语义不变。基准：CSI300 指数（或用户指定）。
         """
         from trader3.data_provider import QlibDataProvider
@@ -1627,10 +1749,18 @@ class RunBacktestTool(BaseTool):
             z_stack = np.stack(
                 [_expr_zscores(node, expr_panels, valid_flags) for node in nodes]
             )
-            combined = _combine_factor_scores(z_stack)
+            combined = _combine_factor_scores(z_stack, weights=signal_weights)
             # 全因子无效日分数为 NaN → 选股时视为 -inf 排除
             score_matrix = np.where(np.isfinite(combined), combined, -np.inf)
-            multi_caveat = f"多因子等权合成: K={len(nodes)} 个表达式"
+            if signal_weights:
+                w_arr = np.asarray(signal_weights, dtype=np.float64)
+                w_arr = w_arr / float(np.sum(w_arr))
+                multi_caveat = (
+                    f"多因子加权合成: K={len(nodes)}, "
+                    f"weights=[{', '.join(f'{w:.4f}' for w in w_arr)}]"
+                )
+            else:
+                multi_caveat = f"多因子等权合成: K={len(nodes)} 个表达式"
 
         equity, port_returns, turnover_total, positive_days, sim_stats = (
             _run_momentum_backtest(
