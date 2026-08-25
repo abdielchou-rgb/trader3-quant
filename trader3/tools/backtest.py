@@ -2107,6 +2107,7 @@ class WalkForwardAnalysisTool(BaseTool):
         signal_expr: str = "",
         signal_exprs: list[str] | None = None,
         step: int | None = None,
+        mode: str = "wfa",
     ) -> Trader3Response:
         """
         滚动 WFA（真实 qlib 数据优先）。
@@ -2119,8 +2120,16 @@ class WalkForwardAnalysisTool(BaseTool):
         - step 缺省等于 test_window（OOS 窗口非重叠，显著性不被共享样本抬高）；
           显式传入更小的 step 时 caveats 警告窗口重叠会高估显著性。
         - qlib 不可用：回退种子 123 合成数据，并在 caveats 明示"WFA基于合成数据"。
+        - mode="cpcv"：在上述结果之上叠加运行 CPCV（AFML ch.12 组合净化交叉验证，
+          n_blocks=6/test_blocks=2/purge=5），key_metrics 追加 cpcv_* 分布指标，
+          OOS 表现以组合路径分布而非单点呈现；缺省 "wfa" 行为完全不变。
         """
         eff_step = int(step) if step is not None else int(test_window)
+        mode_eff = (mode or "wfa").strip().lower()
+        if mode_eff not in ("wfa", "cpcv"):
+            return Trader3Response.error(
+                f"未知 mode={mode!r}（支持 'wfa' / 'cpcv'）"
+            )
 
         panel = None
         panel_err: Exception | None = None
@@ -2283,6 +2292,40 @@ class WalkForwardAnalysisTool(BaseTool):
                 "OOS 窗口重叠，相邻窗口共享样本会高估显著性",
             )
 
+        key_metrics = {
+            "样本内收益": report.is_mean_return,
+            "样本外收益": report.oos_mean_return,
+            "样本内夏普": report.is_sharpe,
+            "样本外夏普": report.oos_sharpe,
+            "参数稳定性": report.parameter_stability,
+            "过拟合概率": report.overfitting_probability,
+            "OOS交易日": int(oos_concat.size),
+            "dsr": dsr_value,
+        }
+
+        if mode_eff == "cpcv":
+            # 延迟导入避免模块级环（cpcv 复用本模块的执行约束/涨跌停函数）
+            from trader3.tools.cpcv import run_cpcv
+
+            cpcv_res = run_cpcv(
+                stock_returns, factor_scores,
+                codes=exec_codes, n_blocks=6, test_blocks=2, purge=5,
+            )
+            key_metrics.update({
+                "cpcv_median_sr": cpcv_res["sr_ann_median"],
+                "cpcv_p05": cpcv_res["sr_ann_p05"],
+                "cpcv_p95": cpcv_res["sr_ann_p95"],
+                "cpcv_prob_negative": cpcv_res["prob_negative"],
+            })
+            caveats.append(
+                f"CPCV: C(6,2) 组合净化交叉验证 (purge=5)："
+                f"{cpcv_res['n_combos']} 条组合路径（{cpcv_res['paths']} 条独立路径）、"
+                f"年化夏普 p05/p50/p95 = {cpcv_res['sr_ann_p05']:.2f}/"
+                f"{cpcv_res['sr_ann_median']:.2f}/{cpcv_res['sr_ann_p95']:.2f}、"
+                f"日SR<0 占比 {cpcv_res['prob_negative']:.0%}"
+                " —— OOS 表现为分布而非单点"
+            )
+
         return Trader3Response(
             success=True,
             data=report,
@@ -2292,15 +2335,6 @@ class WalkForwardAnalysisTool(BaseTool):
                 f"过拟合概率 {report.overfitting_probability:.0%}, "
                 f"参数稳定性 {report.parameter_stability:.0%}"
             ),
-            key_metrics={
-                "样本内收益": report.is_mean_return,
-                "样本外收益": report.oos_mean_return,
-                "样本内夏普": report.is_sharpe,
-                "样本外夏普": report.oos_sharpe,
-                "参数稳定性": report.parameter_stability,
-                "过拟合概率": report.overfitting_probability,
-                "OOS交易日": int(oos_concat.size),
-                "dsr": dsr_value,
-            },
+            key_metrics=key_metrics,
             caveats=caveats,
         )

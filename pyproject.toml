@@ -29,6 +29,14 @@ api = [
 cvxpy = [
     "cvxpy>=1.4",
 ]
+portfolio = [
+    "riskfolio-lib>=6",
+]
+minute = [
+    # parquet 存储后端；缺失时 trader3/v2/minute_data.py 自动退 CSV.gz，不阻断采集。
+    # 备源 baostock 不强制安装：按需手动 pip install baostock（fetch_minute_bs 路径）。
+    "pyarrow>=14",
+]
 
 [project.scripts]
 trader3 = "trader3.cli:main"

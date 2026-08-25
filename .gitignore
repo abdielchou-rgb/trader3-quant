@@ -14,3 +14,4 @@ data/kline_cache/
 *.db-wal
 *.db-shm
 *.log
+data/minute_5/
