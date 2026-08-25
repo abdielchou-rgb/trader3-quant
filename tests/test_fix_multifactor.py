@@ -230,17 +230,15 @@ def test_topk_combine_reads_selected(real_env, monkeypatch):
         "多因子等权合成: K=2 个表达式" in c for c in r.caveats
     ), f"top_k_combine 未按前 2 名合成: {r.caveats}"
 
-    # 仅 1 条可用 expr → error
+    # 仅 1 条可用 expr → 降级为单因子（不再报错，caveat 注明降级）
     (sel_dir / "selected.json").write_text(
         json.dumps([{"expr": exprs[0]}], ensure_ascii=False),
         encoding="utf-8",
     )
     r2 = tool.execute(universe=codes, start_date=s, end_date=e,
                       top_k_combine=True, factor_from_selected=2)
-    assert not r2.success, "不足 2 条 expr 不应成功"
-    assert ("selected.json" in r2.summary) or ("2" in r2.summary), (
-        f"报错未说明原因: {r2.summary}"
-    )
+    assert r2.success, "单因子应降级成功"
+    assert any("降级" in c for c in r2.caveats), f"缺少降级 caveat: {r2.caveats}"
 
     # 文件缺失 → error
     monkeypatch.setattr(btmod, "_PROJECT_ROOT", str(tmp_path / "missing"))

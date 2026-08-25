@@ -94,6 +94,10 @@ def run_cpcv(
       sr_ann_p05/p95  : 年化夏普 5%/95% 分位
       prob_negative   : 日 SR<0 的组合占比
       oos_days_total  : 全部组合的测试日观测总数
+      oos_concat_pooled : 全部组合测试片段按组合序拼接的日收益（float 列表，
+        np.asarray 即得数组）。**路径依赖拼接近似口径**：同一测试块被多个
+        组合覆盖时按组合枚举序重复计入，并非日历时间序列，仅用于聚合统计
+        （均值/波动），不可当作真实净值逐日路径解读。
     )
     """
     stock_returns = np.asarray(stock_returns, dtype=np.float64)
@@ -127,6 +131,7 @@ def run_cpcv(
 
     sr_daily_list: list[float] = []
     oos_days_total = 0
+    pooled_chunks: list[np.ndarray] = []
     for combo in combos:
         # ── 训练段因子均值 → 等权 top-k（与 _run_wfa_rolling 同语义）──
         keep = train_keep_mask(T, blocks, combo, purge)
@@ -161,6 +166,7 @@ def run_cpcv(
             oos_days_total += e - s
 
         path_rets = np.concatenate(chunks)
+        pooled_chunks.extend(chunks)
         p_std = float(np.std(path_rets, ddof=1))
         sr_daily_list.append(
             float(np.mean(path_rets)) / p_std if p_std > 1e-10 else 0.0
@@ -169,6 +175,13 @@ def run_cpcv(
     sr_daily = np.asarray(sr_daily_list, dtype=np.float64)
     sr_ann = sr_daily * sqrt_ann
     n_combos = len(combos)
+
+    # 路径依赖拼接：按组合枚举序串接全部测试片段（同一测试块被多组合覆盖时
+    # 重复计入）——聚合统计口径，非日历净值路径（见 Returns 说明）
+    oos_concat_pooled = (
+        np.concatenate(pooled_chunks) if pooled_chunks
+        else np.array([], dtype=np.float64)
+    )
 
     return {
         "n_combos": n_combos,
@@ -180,4 +193,5 @@ def run_cpcv(
         "sr_ann_p95": float(np.percentile(sr_ann, 95)),
         "prob_negative": float(np.mean(sr_daily < 0.0)),
         "oos_days_total": int(oos_days_total),
+        "oos_concat_pooled": [float(x) for x in oos_concat_pooled],
     }

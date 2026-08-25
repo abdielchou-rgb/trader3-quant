@@ -10,7 +10,7 @@
   ],
   "population_size": 50,
   "generations": 15,
-  "elapsed_seconds": 64.9,
+  "elapsed_seconds": 61.9,
   "candidates_considered": 65,
   "selected_count": 2,
   "best_fitness": 0.623,
@@ -45,7 +45,7 @@
         }
       },
       "source": "qlib/csi300",
-      "created": "2026-08-24 19:39:41"
+      "created": "2026-08-25 19:54:37"
     },
     {
       "expr": "neg(sub(amount, open))",
@@ -77,7 +77,7 @@
         }
       },
       "source": "qlib/csi300",
-      "created": "2026-08-24 19:39:41"
+      "created": "2026-08-25 19:54:37"
     }
   ],
   "fitness_history": [

@@ -29,7 +29,7 @@
       }
     },
     "source": "qlib/csi300",
-    "created": "2026-08-24 19:39:41"
+    "created": "2026-08-25 19:54:37"
   },
   {
     "expr": "neg(sub(amount, open))",
@@ -61,6 +61,9 @@
       }
     },
     "source": "qlib/csi300",
-    "created": "2026-08-24 19:39:41"
+    "created": "2026-08-25 19:54:37",
+    "oos_veto": true,
+    "veto_reason": "三宇宙OOS全负(csi300 -6.7%/csi500 -3.5%/csi1000 -12.3%),仅VAL有表现——验证区优等生OOS翻车(2026-08-25基线v2裁定)",
+    "vetoed_at": "2026-08-25"
   }
 ]

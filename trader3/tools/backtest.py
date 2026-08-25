@@ -1010,48 +1010,88 @@ def _entry_expr(entry: Any) -> str:
     return str(entry.get("expr", "")).strip() if isinstance(entry, dict) else ""
 
 
-def _load_expr_from_selected(rank: int) -> str:
+def _entry_vetoed(entry: Any) -> bool:
+    """selected.json 条目的 OOS 否决标记：oos_veto 为真值即被样本外检验否决。"""
+    return bool(entry.get("oos_veto")) if isinstance(entry, dict) else False
+
+
+def _kept_entries(entries: list) -> tuple[list[Any], int]:
+    """剔除 oos_veto 为真的条目；返回 (保留条目, 否决数)。"""
+    kept = [en for en in entries if not _entry_vetoed(en)]
+    return kept, len(entries) - len(kept)
+
+
+def _load_expr_from_selected(rank: int, veto_stats: dict | None = None) -> str:
     """
     从 selected.json 读取第 rank 名因子的 expr。
 
-    文件按分数降序排列（run_evolution.py 写出），rank=1 即第一名。
+    文件按分数降序排列（run_evolution.py 写出），rank=1 即第一名；
+    oos_veto 为真的条目不参与 rank 计数（基线 v2 裁定 2026-08-25）。
+
+    veto_stats : 可选输出 dict — 写入 "expr_skipped"（被否决跳过的条目数），
+                 供 execute 层写 caveat。
 
     Raises
     ------
     FileNotFoundError / ValueError / IndexError — 均带明确原因，由 execute 层转 error 响应。
     """
     entries = _read_selected_entries()
-    if not 1 <= int(rank) <= len(entries):
-        raise IndexError(
-            f"factor_from_selected={rank} 超出范围（selected.json 共 {len(entries)} 名）"
+    kept, n_veto = _kept_entries(entries)
+    if veto_stats is not None:
+        veto_stats["expr_skipped"] = n_veto
+    if not 1 <= int(rank) <= len(kept):
+        msg = f"factor_from_selected={rank} 超出范围（selected.json 共 {len(entries)} 名"
+        msg += (
+            f"，OOS 否决 {n_veto} 名后可用 {len(kept)} 名）" if n_veto else "）"
         )
-    expr = _entry_expr(entries[int(rank) - 1])
+        raise IndexError(msg)
+    expr = _entry_expr(kept[int(rank) - 1])
     if not expr:
         raise ValueError(f"selected.json 第 {rank} 名缺少 expr 字段")
     return expr
 
 
-def _load_topk_exprs_from_selected(k: int) -> list[str]:
+def _load_topk_exprs_from_selected(k: int, veto_stats: dict | None = None) -> list[str]:
     """
     top_k_combine 合成模式：读取 selected.json 前 k 名的 expr 列表。
 
-    可用 expr 少于 2 个（文件缺失/为空/条目缺 expr/不足 k 条时按实际条数截取）
+    oos_veto 为真的条目先被剔除再取前 k 名（不进入候选）；剔除后可用条目
+    不足 k 时降级使用全部可用条目（veto_stats["topk_degraded_k"]=k 供 execute
+    层写降级 caveat）。可用 expr 少于 2 个（文件缺失/为空/条目缺 expr）
     → ValueError，单因子无合成意义，由 execute 层转 error 响应。
     """
     entries = _read_selected_entries()
-    exprs = [e for e in (_entry_expr(en) for en in entries[: max(int(k), 0)]) if e]
-    if len(exprs) < 2:
+    kept, n_veto = _kept_entries(entries)
+    if veto_stats is not None:
+        veto_stats["topk_skipped"] = n_veto
+    k_eff = max(int(k), 0)
+    usable = [e for e in (_entry_expr(en) for en in kept) if e]
+    # 过滤后可用条目不足 K → 降级用全部可用条目（execute 层写降级 caveat）
+    if veto_stats is not None and k_eff > 0 and len(usable) < k_eff:
+        veto_stats["topk_degraded_k"] = k_eff
+    exprs = usable[:k_eff]
+    if not exprs and n_veto:
         raise ValueError(
-            f"selected.json 前 {k} 名可用 expr 不足 2 个"
-            f"（实际 {len(exprs)} 个），无法多因子等权合成"
+            f"selected.json 共 {len(entries)} 名因子全部被 OOS 否决，无可入选因子"
+        )
+    if len(exprs) < 1:
+        raise ValueError(
+            f"selected.json 前 {k} 名可用 expr 为空（文件缺失或全部无效）"
         )
     return exprs
 
 
-def _load_icir_weights_from_selected(exprs: list[str]) -> list[float]:
+def _load_icir_weights_from_selected(
+    exprs: list[str], veto_stats: dict | None = None
+) -> list[float]:
     """
     ICIR 加权模式：按表达式精确匹配读取 selected.json 条目的 gates.icir.value，
     返回 |icir| 权重列表（顺序与入参 exprs 一致）。
+
+    oos_veto 为真的条目不进入权重映射（其表达式权重记 0，等价于退出加权
+    归一，_combine_factor_scores 按 Σw 归一时自然排除）。
+
+    veto_stats : 可选输出 dict — 累加写入 "icir_skipped"（被否决跳过的条目数）。
 
     Raises
     ------
@@ -1060,20 +1100,31 @@ def _load_icir_weights_from_selected(exprs: list[str]) -> list[float]:
     """
     entries = _read_selected_entries()
     icir_map: dict[str, float] = {}
+    vetoed_exprs: set[str] = set()
+    n_veto = 0
     for en in entries:
         ex = _entry_expr(en)
         if not ex:
+            continue
+        if _entry_vetoed(en):
+            n_veto += 1
+            vetoed_exprs.add(ex)
             continue
         gates = en.get("gates") if isinstance(en, dict) else None
         g = gates.get("icir") if isinstance(gates, dict) else None
         val = g.get("value") if isinstance(g, dict) else None
         if isinstance(val, (int, float)) and math.isfinite(float(val)):
             icir_map[ex] = float(val)
+    if veto_stats is not None:
+        veto_stats["icir_skipped"] = veto_stats.get("icir_skipped", 0) + n_veto
     weights: list[float] = []
     for ex in exprs:
-        if ex not in icir_map:
+        if ex in icir_map:
+            weights.append(abs(icir_map[ex]))
+        elif ex in vetoed_exprs:
+            weights.append(0.0)  # 被否决：不参与加权归一（Σw 归一自然排除）
+        else:
             raise ValueError(f"selected.json 缺少 {ex} 的 icir")
-        weights.append(abs(icir_map[ex]))
     return weights
 
 
@@ -1618,6 +1669,9 @@ class RunBacktestTool(BaseTool):
             str(e).strip() for e in (signal_exprs or []) if str(e or "").strip()
         ]
         expr_list: list[str] = []
+        # selected.json OOS 否决统计（基线 v2 裁定 2026-08-25）：
+        # 各加载器写入各自键；top_k_combine+icir 组合读同一文件，取 max 防重复计数
+        veto_stats: dict[str, int] = {}
 
         if signal_expr:
             try:
@@ -1634,12 +1688,14 @@ class RunBacktestTool(BaseTool):
         elif top_k_combine:
             k_top = int(factor_from_selected) if int(factor_from_selected) > 0 else 3
             try:
-                expr_list = _load_topk_exprs_from_selected(k_top)
+                expr_list = _load_topk_exprs_from_selected(k_top, veto_stats=veto_stats)
             except Exception as e:
                 return Trader3Response.error(f"selected.json 多因子加载失败: {e}")
         elif int(factor_from_selected) > 0:
             try:
-                signal_expr = _load_expr_from_selected(int(factor_from_selected))
+                signal_expr = _load_expr_from_selected(
+                    int(factor_from_selected), veto_stats=veto_stats
+                )
             except Exception as e:
                 return Trader3Response.error(f"selected.json 因子加载失败: {e}")
 
@@ -1681,7 +1737,9 @@ class RunBacktestTool(BaseTool):
                     "top_k_combine 组合模式"
                 )
             try:
-                weights_list = _load_icir_weights_from_selected(expr_list)
+                weights_list = _load_icir_weights_from_selected(
+                    expr_list, veto_stats=veto_stats
+                )
             except ValueError as e:
                 return Trader3Response.error(str(e))
             except Exception as e:
@@ -1730,6 +1788,20 @@ class RunBacktestTool(BaseTool):
                     constraints, benchmark, commission,
                     engine_tag="synthetic", data_end=data_end,
                 )
+
+        # ── selected.json OOS 否决 caveat（先于缓存落盘，命中缓存同样携带）──
+        n_veto_skipped = max(
+            veto_stats.get("expr_skipped", 0),
+            veto_stats.get("topk_skipped", 0),
+            veto_stats.get("icir_skipped", 0),
+        )
+        if n_veto_skipped > 0:
+            result.caveats.append(f"OOS否决跳过 {n_veto_skipped} 条")
+        degraded_k = veto_stats.get("topk_degraded_k", 0)
+        if degraded_k > 0:
+            result.caveats.append(
+                f"selected.json 可用因子不足{degraded_k}，降级为{len(expr_list)}条"
+            )
 
         self._save_cache(fp, result)
         return result
@@ -2090,6 +2162,10 @@ class RunBacktestTool(BaseTool):
 # WalkForwardAnalysisTool
 # ═══════════════════════════════════════════
 
+# CPCV 组合聚合口径年化基数（基线 v2 裁定 2026-08-25）：pooled 序列按组合重复
+# 计日、非日历年化，采用 A 股年均交易日 244，与 WFA 的 TRADING_DAYS_PER_YEAR=252 区分
+_CPCV_POOLED_ANNUAL_DAYS = 244
+
 
 class WalkForwardAnalysisTool(BaseTool):
     """Walk-Forward Analysis (M1: 真实滚动验证)"""
@@ -2120,9 +2196,12 @@ class WalkForwardAnalysisTool(BaseTool):
         - step 缺省等于 test_window（OOS 窗口非重叠，显著性不被共享样本抬高）；
           显式传入更小的 step 时 caveats 警告窗口重叠会高估显著性。
         - qlib 不可用：回退种子 123 合成数据，并在 caveats 明示"WFA基于合成数据"。
-        - mode="cpcv"：在上述结果之上叠加运行 CPCV（AFML ch.12 组合净化交叉验证，
-          n_blocks=6/test_blocks=2/purge=5），key_metrics 追加 cpcv_* 分布指标，
-          OOS 表现以组合路径分布而非单点呈现；缺省 "wfa" 行为完全不变。
+        - mode="cpcv"：headline（样本外收益/样本外夏普）改由 CPCV 组合路径聚合
+          （oos_concat_pooled，全部测试片段按组合序路径依赖拼接）计算
+          （年化基数 244），并保留 WFA 单点口径对照键 样本外收益_wfa口径 /
+          样本外夏普_wfa口径；另叠加运行 CPCV 分布指标（AFML ch.12，
+          n_blocks=6/test_blocks=2/purge=5，key_metrics 追加 cpcv_*）；
+          caveat 注明 "headline 为 CPCV 组合聚合口径"。缺省 "wfa" 完全不变。
         """
         eff_step = int(step) if step is not None else int(test_window)
         mode_eff = (mode or "wfa").strip().lower()
@@ -2311,6 +2390,22 @@ class WalkForwardAnalysisTool(BaseTool):
                 stock_returns, factor_scores,
                 codes=exec_codes, n_blocks=6, test_blocks=2, purge=5,
             )
+            # headline 切换为 CPCV 组合聚合口径（基线 v2 裁定 2026-08-25）：
+            # 全部测试片段按组合序路径依赖拼接后计算年化收益/夏普
+            pooled = np.asarray(cpcv_res["oos_concat_pooled"], dtype=np.float64)
+            pooled_mean = float(np.mean(pooled)) if pooled.size else 0.0
+            pooled_std = (
+                float(np.std(pooled, ddof=1)) if pooled.size >= 2 else 0.0
+            )
+            ann_days = _CPCV_POOLED_ANNUAL_DAYS
+            key_metrics["样本外收益"] = pooled_mean * ann_days
+            key_metrics["样本外夏普"] = (
+                pooled_mean / pooled_std * math.sqrt(ann_days)
+                if pooled_std > 1e-12 else 0.0
+            )
+            # WFA 单点口径对照（report 字段仍由 _run_wfa_rolling 拼接口径计算）
+            key_metrics["样本外收益_wfa口径"] = report.oos_mean_return
+            key_metrics["样本外夏普_wfa口径"] = report.oos_sharpe
             key_metrics.update({
                 "cpcv_median_sr": cpcv_res["sr_ann_median"],
                 "cpcv_p05": cpcv_res["sr_ann_p05"],
@@ -2324,6 +2419,11 @@ class WalkForwardAnalysisTool(BaseTool):
                 f"{cpcv_res['sr_ann_median']:.2f}/{cpcv_res['sr_ann_p95']:.2f}、"
                 f"日SR<0 占比 {cpcv_res['prob_negative']:.0%}"
                 " —— OOS 表现为分布而非单点"
+            )
+            caveats.append(
+                "headline 为 CPCV 组合聚合口径"
+                "（全部测试片段按组合序路径依赖拼接，同一测试日可重复计入；"
+                f"年化基数 {ann_days}）；WFA 单点口径见 样本外*_wfa口径 键"
             )
 
         return Trader3Response(
