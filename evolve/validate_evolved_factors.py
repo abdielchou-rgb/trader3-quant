@@ -175,7 +175,7 @@ def main():
           f"{m['夏普比']:>6.2f} {m['最大回撤']:>8.1%} {turn/max(years,1e-9):>6.1f}x/年")
 
     # ── 各因子 ──
-    for name, (expr, _score) in zip(names, factors):
+    for name, (expr, _score) in zip(names, factors, strict=False):
         try:
             from core.gp import normalize
             node = normalize(parse_expr(expr))

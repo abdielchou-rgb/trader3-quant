@@ -63,15 +63,14 @@ def load_qlib_panel(
     fields = ["open", "high", "low", "close", "volume", "vwap", "amount"]
     panel = {f: np.full((T, len(closes)), np.nan, dtype=np.float64) for f in fields}
 
-    codes_list = list(closes.keys())
-    for j, (code, (vals, dates)) in enumerate(closes.items()):
+    for j, (code, (_vals, dates)) in enumerate(closes.items()):
         for f in fields:
             try:
                 fvals, fdates = dp.load_stock(code.lower(), f, start, end)
             except Exception:
                 continue
             # 对齐到 time_axis
-            dmap = {d: v for d, v in zip(fdates, fvals)}
+            dmap = {d: v for d, v in zip(fdates, fvals, strict=False)}
             for i, d in enumerate(time_axis):
                 if d in dmap:
                     panel[f][i, j] = dmap[d]
@@ -132,9 +131,8 @@ def load_etf_panel(
 
     fields = ["open", "high", "low", "close", "volume"]
     panel = {f: np.full((T, N), np.nan, dtype=np.float64) for f in fields}
-    names = list(frames.keys())
 
-    for j, (name, df) in enumerate(frames.items()):
+    for df in frames.values():
         df = df.reindex(dates)
         for f in fields:
             if f in df.columns:

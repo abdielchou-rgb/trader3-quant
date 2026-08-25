@@ -21,6 +21,7 @@ run_evolution.py — 策略进化工厂主入口（marvis 调用）
 import argparse
 import json
 import logging
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -80,7 +81,7 @@ def main():
 
     T, N = fwd.shape
     logger.info(f"面板: {T} 交易日 × {N} 标的")
-    fields_available = {f: panel[f].shape for f in panel}
+    {f: panel[f].shape for f in panel}
 
     # ── 单表达式评估（调试） ──
     if args.eval:
@@ -192,6 +193,47 @@ def main():
     print("\n" + "=" * 70)
     print(f"结果保存: {strategies_dir}/selected.json")
     print("=" * 70)
+
+    # ── 实验清单：向 evolve/experiments/index.jsonl 追加一行 manifest ──
+    try:
+        from trader3.shared_state import SharedState
+
+        _dv_state = SharedState().read_json("data_version") or {}
+        data_version = (_dv_state.get("versions") or {}).get("qlib_bin") or "unknown"
+    except Exception:
+        data_version = "unknown"
+
+    try:
+        git_sha = subprocess.check_output(
+            ["git", "rev-parse", "--short", "HEAD"],
+            cwd=str(_ROOT), stderr=subprocess.DEVNULL, text=True,
+        ).strip() or "nogit"
+    except Exception:
+        git_sha = "nogit"
+
+    manifest = {
+        "ts": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        "expr_best": best_node.to_str(),
+        "fitness_best": best_fit.get("fitness", 0),
+        "ic": best_fit.get("ic", 0),
+        "icir": best_fit.get("icir", 0),
+        "mono": best_fit.get("monotonicity", 0),
+        "ls": best_fit.get("long_short", 0),
+        "universe": args.universe,
+        "n_stocks": N,
+        "gen": args.gen,
+        "pop": args.pop,
+        "train_start": args.start,
+        "train_end": args.end,
+        "data_version": data_version,
+        "selected_count": len(selected),
+        "git_sha": git_sha,
+    }
+    experiments_dir = _ROOT / "evolve" / "experiments"
+    experiments_dir.mkdir(parents=True, exist_ok=True)
+    with open(experiments_dir / "index.jsonl", "a", encoding="utf-8") as f:
+        f.write(json.dumps(manifest, ensure_ascii=False) + "\n")
+    logger.info(f"manifest 已追加: {experiments_dir / 'index.jsonl'}")
 
 
 if __name__ == "__main__":

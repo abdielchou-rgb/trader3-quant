@@ -102,6 +102,21 @@ def main():
     print(f"\n📄 日报: {daily_path}")
     print(f"📊 今日策略: {json.dumps(strategies_today, ensure_ascii=False)}")
 
+    # Step 4.5: 数据质检（QC）— critical>0 时把 QC 行加进推送文本；失败不阻断
+    qc_line = ""
+    try:
+        sys.path.insert(0, PROJECT)
+        from trader3.v2.data_qc import qc_summary_line, run_qc, save_report
+
+        qc_report = run_qc()
+        save_report(qc_report)
+        results["data_qc"] = {"passed": bool(qc_report.get("passed")),
+                              "critical": int(qc_report.get("critical") or 0)}
+        qc_line = qc_summary_line(qc_report)
+        print(f"  {'✗' if not qc_report.get('passed') else '✓'} {qc_line}")
+    except Exception as e:
+        print(f"  ⚠ 数据质检失败(不阻断): {e}")
+
     # Step 5: 因子衰减监控（F1）+ 纸面 vs 基线对照；失败不阻断
     watch_lines = []
     try:
@@ -157,7 +172,10 @@ def main():
             f"- {k}: {'✓' if v.get('ok') else '✗'} {str(v.get('output', ''))[:80]}"
             for k, v in results["tasks"].items()
         )
-        extra = ("\n\n" + "\n".join(watch_lines)) if watch_lines else ""
+        extra_lines = list(watch_lines)
+        if qc_line and (results.get("data_qc", {}).get("critical") or 0) > 0:
+            extra_lines.insert(0, qc_line)
+        extra = ("\n\n" + "\n".join(extra_lines)) if extra_lines else ""
         send_notification(
             f"3号交易员日报 {today}（{n_ok}/{len(results['tasks'])} 任务成功）",
             f"{brief}{extra}{anchor_line}\n\n策略: "

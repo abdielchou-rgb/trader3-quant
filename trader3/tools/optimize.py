@@ -186,6 +186,75 @@ def _verify_constraints(weights: np.ndarray, cons: dict) -> list[str]:
 
 
 # ═══════════════════════════════════════════
+# 行业中性（后处理投影法，cvxpy/scipy 两后端共用）
+# ═══════════════════════════════════════════
+
+INDUSTRY_NEUTRAL_COVERAGE_MIN = 0.5  # 行业覆盖率低于此值 → 不启用中性化
+
+
+def _resolve_industry_labels(
+    tickers: list[str],
+    industries: dict[str, str] | None,
+) -> dict[str, str]:
+    """
+    解析 code→行业 标签表。
+
+    industries 显式给定 → 按其取值（缺失股记 "Unknown"）；
+    None → 逐票走 v2.industry.get_industry 自动补全（只读本地缓存，不联网）；
+    查询异常时整表降级 "Unknown"（覆盖率归零，调用方据此跳过中性化）。
+    """
+    if industries is not None:
+        return {t: (str(industries[t]) if industries.get(t) else "Unknown") for t in tickers}
+    try:
+        from trader3.v2.industry import get_industry
+
+        resolved: dict[str, str] = {}
+        for t in tickers:
+            label = get_industry(t)
+            resolved[t] = str(label) if label else "Unknown"
+        return resolved
+    except Exception:
+        return {t: "Unknown" for t in tickers}
+
+
+def _industry_neutral_project(
+    weights: np.ndarray,
+    tickers: list[str],
+    labels: dict[str, str],
+    max_single: float,
+) -> tuple[np.ndarray, int]:
+    """
+    后处理投影：把各行业聚合权重拉回基准占比（无外部基准时 = 等权行业占比 1/K），
+    行业内按原比例缩放保持选股结构，最后 clip 到 max_single 并重归一。
+
+    纯后处理层实现 —— cvxpy 与 scipy 两求解器产出统一经此处投影，
+    不改目标函数，行为一致。clip/重归一可能轻微破坏严格中性或上限，
+    由调用方以 _verify_constraints 复检并如实记录违规。
+
+    Returns
+    -------
+    (new_weights, k_industries)
+    """
+    w = np.asarray(weights, dtype=np.float64).copy()
+    N = len(w)
+    if N == 0:
+        return w, 0
+    ordered = [labels.get(t, "Unknown") for t in tickers]
+    groups = sorted(set(ordered))
+    k = len(groups)
+    target_each = 1.0 / k
+    for g in groups:
+        rows = np.asarray([i for i, lab in enumerate(ordered) if lab == g], dtype=int)
+        w_group = float(np.sum(w[rows]))
+        share = w[rows] / w_group if w_group > 1e-12 else np.full(len(rows), 1.0 / len(rows))
+        w[rows] = target_each * share
+    w = np.clip(w, 0.0, max_single)
+    total = float(np.sum(w))
+    w = w / total if total > 1e-10 else np.full(N, 1.0 / N)
+    return w, k
+
+
+# ═══════════════════════════════════════════
 # 优化器
 # ═══════════════════════════════════════════
 
@@ -543,8 +612,16 @@ class OptimizePortfolioTool(BaseTool):
         method: str = "risk_budget",
         constraints: PortfolioConstraints = None,
         risk_model: dict = None,
+        industry_neutral: bool = False,
+        industries: dict[str, str] | None = None,
     ) -> Trader3Response:
-        """执行组合优化 (M2: 真实优化引擎)"""
+        """执行组合优化 (M2: 真实优化引擎)
+
+        industry_neutral=True 时在求解器产出后做行业中性后处理投影
+        （行业权重拉回等权占比、行业内保持原比例、clip+重归一）；
+        industries 为 {code: 行业}，None 时经 v2.industry.get_industry 自动补全，
+        覆盖率不足 50% 则不启用（权重原样保留，caveat 明示）。
+        """
         if not signals:
             return Trader3Response.error("需提供信号字典 {symbol: score}")
 
@@ -598,6 +675,28 @@ class OptimizePortfolioTool(BaseTool):
         else:
             return Trader3Response.error(f"未知优化方法: {method}")
 
+        # ── 行业中性后处理投影（两后端统一走此层，不改目标函数）──
+        neutral_note = ""
+        if industry_neutral:
+            labels_map = _resolve_industry_labels(tickers, industries)
+            coverage = (
+                sum(1 for v in labels_map.values() if v != "Unknown") / N if N else 0.0
+            )
+            if coverage < INDUSTRY_NEUTRAL_COVERAGE_MIN:
+                neutral_note = "行业覆盖率不足，未启用"
+            else:
+                weights, k_inds = _industry_neutral_project(
+                    weights, tickers, labels_map, cons["max_single"]
+                )
+                neutral_note = f"行业中性已启用(行业数={k_inds})"
+                # 中性化后复检：丢弃投影前的结构性违规（对应旧权重已失效），
+                # 保留求解器过程性告警，如实记录投影后仍破限的情形
+                violations = [
+                    v for v in violations
+                    if not any(key in v for key in ("超限", "负权重", "偏离"))
+                ]
+                violations.extend(_verify_constraints(weights, cons))
+
         # ── 计算结果指标 ──
         expected_return = float(weights @ mu)
         expected_risk = float(math.sqrt(max(weights @ Sigma @ weights, 1e-30)))
@@ -636,6 +735,8 @@ class OptimizePortfolioTool(BaseTool):
         ]
         if cons.get("cap_adjusted_note"):
             caveats.append(cons["cap_adjusted_note"])
+        if neutral_note:
+            caveats.append(neutral_note)
         if not result.constraints_satisfied:
             caveats.append(f"约束违规 {len(structural)} 项: {'; '.join(structural)}")
         if any("未收敛" in v or "收敛警告" in v for v in violations):
@@ -699,6 +800,8 @@ class RegimeAwareAllocationTool(BaseTool):
         regime_probs: dict[str, float] = None,
         regime_weights: dict[str, dict] = None,
         constraints: PortfolioConstraints = None,
+        industry_neutral: bool = False,
+        industries: dict[str, str] | None = None,
     ) -> Trader3Response:
         """
         情境路由 (M2: 真实概率加权路由)。
@@ -707,12 +810,18 @@ class RegimeAwareAllocationTool(BaseTool):
             composite_score[asset] = sum_r P(r) * w_r(asset)
             target_weight[asset] = composite_score[asset] / sum(composite_score)
 
+        industry_neutral=True 时对路由后权重做行业中性后处理投影
+        （与 OptimizePortfolioTool 同一实现，行为一致）；
+        industries 为 {code: 行业}，None 时自动补全，覆盖率不足 50% 则不启用。
+
         parameters
         ----------
         signals : {asset: signal_score} — 用于计算指标
         regime_probs : {regime: probability}
         regime_weights : {regime: {asset: weight}}
         constraints : PortfolioConstraints (用于 max_single 限制)
+        industry_neutral : 是否启用行业中性后处理投影
+        industries : {code: 行业} 显式行业映射（可选）
         """
         if not signals:
             return Trader3Response.error("需提供信号字典 {symbol: score}")
@@ -764,6 +873,23 @@ class RegimeAwareAllocationTool(BaseTool):
             weights = weights / np.sum(weights)
         cap_violations = _verify_constraints(weights, cons_dict)
 
+        # ── 行业中性后处理投影（与 OptimizePortfolioTool 同一实现）──
+        neutral_note = ""
+        if industry_neutral:
+            labels_map = _resolve_industry_labels(tickers, industries)
+            coverage = (
+                sum(1 for v in labels_map.values() if v != "Unknown") / len(tickers)
+                if tickers else 0.0
+            )
+            if coverage < INDUSTRY_NEUTRAL_COVERAGE_MIN:
+                neutral_note = "行业覆盖率不足，未启用"
+            else:
+                weights, k_inds = _industry_neutral_project(
+                    weights, tickers, labels_map, max_single
+                )
+                neutral_note = f"行业中性已启用(行业数={k_inds})"
+                cap_violations = _verify_constraints(weights, cons_dict)
+
         # ── 计算指标 (用 composite_scores 作为信号重建 mu/Sigma) ──
         composite_signals = {t: composite_scores[t] * 100 for t in tickers}
         mu, Sigma, _ = _signals_to_mu_sigma(composite_signals, rng_seed=123)
@@ -809,6 +935,8 @@ class RegimeAwareAllocationTool(BaseTool):
         )
 
         regime_caveats = [f"求解后端: {SOLVER_BACKEND}"]
+        if neutral_note:
+            regime_caveats.append(neutral_note)
         if cap_violations:
             regime_caveats.insert(0, f"约束违规: {'; '.join(cap_violations)}")
 

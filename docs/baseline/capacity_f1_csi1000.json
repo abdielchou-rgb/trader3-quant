@@ -1,0 +1,72 @@
+{
+  "assumptions": {
+    "K": 30,
+    "turnover": 8.0,
+    "gross_ann": 0.526,
+    "vol_ann": 0.238,
+    "avg_px_assumed": 15.0,
+    "adv_basis": "近244日成交量均值×假设均价15元"
+  },
+  "curve": [
+    {
+      "capital": 1000000.0,
+      "per_name_cny": 33333,
+      "participation": 0.0003,
+      "cap_violation": false,
+      "impact_bp": 0.8,
+      "drag_ann": 0.0007,
+      "net_ann": 0.5253,
+      "net_sharpe": 2.21
+    },
+    {
+      "capital": 3000000.0,
+      "per_name_cny": 100000,
+      "participation": 0.001,
+      "cap_violation": false,
+      "impact_bp": 1.4,
+      "drag_ann": 0.0011,
+      "net_ann": 0.5249,
+      "net_sharpe": 2.21
+    },
+    {
+      "capital": 10000000.0,
+      "per_name_cny": 333333,
+      "participation": 0.0033,
+      "cap_violation": false,
+      "impact_bp": 2.6,
+      "drag_ann": 0.0021,
+      "net_ann": 0.5239,
+      "net_sharpe": 2.2
+    },
+    {
+      "capital": 30000000.0,
+      "per_name_cny": 1000000,
+      "participation": 0.0098,
+      "cap_violation": false,
+      "impact_bp": 4.5,
+      "drag_ann": 0.0036,
+      "net_ann": 0.5224,
+      "net_sharpe": 2.2
+    },
+    {
+      "capital": 100000000.0,
+      "per_name_cny": 3333333,
+      "participation": 0.0328,
+      "cap_violation": false,
+      "impact_bp": 8.1,
+      "drag_ann": 0.0065,
+      "net_ann": 0.5195,
+      "net_sharpe": 2.18
+    },
+    {
+      "capital": 300000000.0,
+      "per_name_cny": 10000000,
+      "participation": 0.0984,
+      "cap_violation": false,
+      "impact_bp": 14.1,
+      "drag_ann": 0.0113,
+      "net_ann": 0.5147,
+      "net_sharpe": 2.16
+    }
+  ]
+}

@@ -179,7 +179,7 @@ class EvolutionEngine:
         """按权重选择"""
         r = self.rng.random()
         acc = 0.0
-        for (i, _), w in zip(ranked, weights):
+        for (i, _), w in zip(ranked, weights, strict=False):
             acc += w
             if r <= acc:
                 return self.population[i]

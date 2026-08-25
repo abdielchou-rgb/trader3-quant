@@ -43,7 +43,8 @@ DEFAULT_N_STOCKS = 50       # 默认股票数
 REBALANCE_FREQ = 21         # 月频调仓
 MAX_UNIVERSE = 150          # 默认股票池上限（超出则确定性抽样）
 DEFAULT_PRICE_LIMIT = 0.098  # 涨跌停幅度默认值（主板；合成数据路径统一使用）
-CODE_VERSION = "post-audit-6"   # 回测代码版本号（参与缓存指纹，逻辑变更时递增；
+CODE_VERSION = "post-audit-7"   # 回测代码版本号（参与缓存指纹，逻辑变更时递增；
+# post-audit-7: 真实路径接入 Brinson(BHB简化) 行业归因，输出内容变更，旧缓存作废；
 # post-audit-6: 数据内容纪元——治愈尾部拼接修复后旧缓存全部作废）
 
 
@@ -471,6 +472,99 @@ def _format_limit_caveats(
             "（部分买入被涨停拦截，资金滞留现金、收益按 0 计）"
         )
     return caveats
+
+
+# ═══════════════════════════════════════════
+# Brinson(BHB 简化) 行业归因 — 最小诚实版（真实路径）
+# ═══════════════════════════════════════════
+
+BRINSON_COVERAGE_MIN = 0.5   # 行业覆盖率低于此值 → 跳过归因（只出 caveat 不出数字）
+
+
+def _stock_interval_returns(returns_matrix: np.ndarray) -> np.ndarray:
+    """
+    (T, N) 日收益矩阵 → (N,) 全区间复合收益。
+
+    缺失/停牌日在 returns_matrix 中记 0，复合时为恒等因子，不产生虚假贡献。
+    """
+    growth = np.prod(1.0 + np.asarray(returns_matrix, dtype=np.float64), axis=0)
+    return growth - 1.0
+
+
+def _brinson_attribution(
+    codes_list: list[str],
+    final_weights: np.ndarray,
+    returns_matrix: np.ndarray,
+) -> dict[str, Any] | None:
+    """
+    单期（整个回测区间）Brinson-Hood-Beebower 简化归因。
+
+    诚实口径：
+    - 行业标签来自 v2.industry.get_industry（只读本地缓存，不触发联网）；
+      无行业数据的股票记 "Unknown"，覆盖率 = 有标签股票 / 全池；
+    - 行业基准收益 r_b,i = 该行业成分股等权平均全区间复合收益；
+    - 基准行业权重 w_b,i = 全池（asof 成分）等权占比 n_i/N（市值无关）；
+    - 组合行业权重 w_p,i = 回测期末持仓权重按行业聚合；
+    - 组合行业收益 r_p,i = 行业内按期末持仓权重加权（区别于基准等权 → 选股效应来源；
+      无持仓的行业回退 r_b,i，选股项自然归零）；
+    - allocation_effect = Σ(w_p,i − w_b,i)(r_b,i − R_b)，R_b = Σ w_b,i·r_b,i；
+    - selection_effect = Σ w_b,i(r_p,i − r_b,i) + Σ(w_p,i − w_b,i)(r_p,i − r_b,i)
+      （交互项并入 selection，即合并后 Σ w_p,i(r_p,i − r_b,i)）。
+
+    Returns
+    -------
+    dict(allocation, selection, coverage, n_industries)；覆盖率 < 50% 或输入退化返回 None
+    （调用方据此仅输出"覆盖率不足"caveat，不产出数字）。查找抛错由调用方 try/except 兜底。
+    """
+    from trader3.v2.industry import get_industry
+
+    N = len(codes_list)
+    if N == 0 or final_weights is None or len(final_weights) != N:
+        return None
+    raw_labels = [get_industry(c) for c in codes_list]
+    coverage = sum(1 for x in raw_labels if x) / N
+    if coverage < BRINSON_COVERAGE_MIN:
+        return None
+
+    labels = ["Unknown" if x is None else str(x) for x in raw_labels]
+    stock_rets = _stock_interval_returns(returns_matrix)
+    weights = np.asarray(final_weights, dtype=np.float64)
+
+    members: dict[str, list[int]] = {}
+    for j, g in enumerate(labels):
+        members.setdefault(g, []).append(j)
+
+    industry_w_b: dict[str, float] = {}
+    industry_r_b: dict[str, float] = {}
+    industry_w_p: dict[str, float] = {}
+    industry_r_p: dict[str, float] = {}
+    for g, idx in members.items():
+        rows = np.asarray(idx, dtype=int)
+        industry_w_b[g] = len(idx) / N
+        industry_r_b[g] = float(np.mean(stock_rets[rows]))
+        w_sum = float(np.sum(weights[rows]))
+        industry_w_p[g] = w_sum
+        if w_sum > 1e-12:
+            industry_r_p[g] = float(np.dot(weights[rows], stock_rets[rows]) / w_sum)
+        else:
+            industry_r_p[g] = industry_r_b[g]
+
+    R_b = float(sum(industry_w_b[g] * industry_r_b[g] for g in members))
+    allocation_effect = float(sum(
+        (industry_w_p[g] - industry_w_b[g]) * (industry_r_b[g] - R_b)
+        for g in members
+    ))
+    selection_effect = float(sum(
+        industry_w_b[g] * (industry_r_p[g] - industry_r_b[g])
+        + (industry_w_p[g] - industry_w_b[g]) * (industry_r_p[g] - industry_r_b[g])
+        for g in members
+    ))
+    return {
+        "allocation": allocation_effect,
+        "selection": selection_effect,
+        "coverage": float(coverage),
+        "n_industries": len(members),
+    }
 
 
 def _run_portfolio_simulation(
@@ -1078,7 +1172,8 @@ def _run_momentum_backtest(
     Returns
     -------
     equity, port_returns, turnover_total, positive_days, stats
-    （stats 含 limit_up_blocked / limit_down_blocked / final_cash_weight）
+    （stats 含 limit_up_blocked / limit_down_blocked / final_cash_weight /
+     final_weights —— 期末实际生效持仓权重，供 Brinson 归因聚合行业敞口）
     """
     scores = (
         _momentum_scores(close_matrix) if score_matrix is None else score_matrix
@@ -1143,6 +1238,7 @@ def _run_momentum_backtest(
         "limit_up_blocked": limit_up_blocked,
         "limit_down_blocked": limit_down_blocked,
         "final_cash_weight": float(cash_weight),
+        "final_weights": weights.copy(),
     }
     return equity, port_returns, turnover_total, positive_days, stats
 
@@ -1804,7 +1900,6 @@ class RunBacktestTool(BaseTool):
             ),
             "已扣除印花税/佣金/冲击成本",
             "未处理停牌；涨跌停按板块幅度拦截（ST 无法从代码判断，统一按板块幅度处理）",
-            ATTRIBUTION_CAVEAT,
         ]
         caveats.extend(
             _format_limit_caveats(
@@ -1812,6 +1907,31 @@ class RunBacktestTool(BaseTool):
                 sim_stats["limit_down_blocked"],
                 sim_stats["final_cash_weight"],
             )
+        )
+
+        # ── Brinson(BHB 简化) 行业归因：任何异常只记 caveat，不影响主回测 ──
+        brinson_ok = False
+        br_allocation = br_selection = 0.0
+        try:
+            br = _brinson_attribution(
+                codes_list, sim_stats.get("final_weights"), returns_matrix
+            )
+            if br is None:
+                caveats.append("行业覆盖率不足，跳过归因")
+            else:
+                brinson_ok = True
+                br_allocation = float(br["allocation"])
+                br_selection = float(br["selection"])
+                caveats.append(
+                    f"Brinson(BHB简化): 配置 {br_allocation:.1%} 选择 {br_selection:.1%}"
+                    f"（行业来源: industry_map, 覆盖率 {float(br['coverage']):.0%}）"
+                )
+        except Exception as exc:
+            caveats.append(f"Brinson 归因跳过: {type(exc).__name__}: {exc}")
+        # Barra 暴露仍无多因子库支撑；Brinson 成功时归因声明收窄为 Barra 单项
+        caveats.append(
+            "风险暴露(Barra)需要多因子库，当前版本不提供"
+            if brinson_ok else ATTRIBUTION_CAVEAT
         )
         if sampled_note:
             caveats.append(sampled_note)
@@ -1835,6 +1955,10 @@ class RunBacktestTool(BaseTool):
                 "信息比": report.information_ratio,
                 "年化换手": report.annual_turnover,
                 "t统计量": report.t_statistic,
+                **(
+                    {"配置效应": br_allocation, "选择效应": br_selection}
+                    if brinson_ok else {}
+                ),
             },
             charts=[
                 ChartSpec(
