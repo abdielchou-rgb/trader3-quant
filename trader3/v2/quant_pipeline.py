@@ -23,6 +23,7 @@ import pandas as pd
 
 from trader3.v2.order_manager import OrderManager, OrderManagerConfig
 from trader3.v2.portfolio import PortfolioConfig, PortfolioConstruction
+from trader3.v2.execution import KillSwitch, LiquidityEngine, reconcile_positions
 
 logger = logging.getLogger("trader3.v2.quant_pipeline")
 
@@ -44,6 +45,12 @@ class QuantPipelineConfig:
     use_moe: bool = False                  # 多专家集成（门控融合）替代单一 ensemble
     moe_experts: list[str] | None = None   # 专家模型列表（None 用默认）
     ewma_cov_lambda: float = 0.94          # 协方差 EWMA 衰减
+    # ── 执行层加固 ──
+    use_cost_gate: bool = False            # 流动性/冲击成本门禁（预期收益需覆盖成本）
+    use_reconcile: bool = False            # 下单后与券商持仓对账
+    kill_switch_dd: float = 0.05           # 回撤熔断阈值
+    edge_per_score_bps: float = 50.0       # 得分每单位→预期收益(bp)，用于成本门禁
+    max_participation: float = 0.1         # 单笔参与率上限（流动性引擎）
 
 
 # regime 标签 -> (方法, gross 敞口系数)
@@ -67,6 +74,16 @@ def _panel_last_prices(panel: pd.DataFrame) -> dict[str, float]:
         return {}
     last = close.iloc[-1]
     return {a: float(v) for a, v in last.items() if np.isfinite(v) and v > 0}
+
+
+def _adv_from_panel(panel: pd.DataFrame) -> dict[str, float]:
+    """由面板 volume 字段计算各标的日均成交量（ADV），供流动性引擎使用。"""
+    try:
+        vol = panel.xs("volume", axis=1, level=1)
+    except Exception:
+        return {}
+    adv = vol.mean(axis=0)
+    return {a: float(v) for a, v in adv.items() if np.isfinite(v) and v > 0}
 
 
 def _default_forward(panel: pd.DataFrame, horizon: int = 5) -> pd.DataFrame:
@@ -165,12 +182,14 @@ async def run_quant_pipeline(
     overlay=None,
     config: QuantPipelineConfig | None = None,
     build_scores: Callable | None = None,
+    kill_switch: KillSwitch | None = None,
 ) -> dict[str, Any]:
     """
     执行端到端量化管线。返回 {scores, weights, orders, equity, meta}。
 
     - 若 scores 给定，跳过 ensemble；否则由 factor_exprs 经 DSL 计算 + ensemble 合成
     - broker=None 时只算到权重，不下单（便于回测/审计）
+    - kill_switch 可注入（跨调用持久），回撤超阈即不下单
     """
     cfg = config or QuantPipelineConfig()
     factor_exprs = factor_exprs or cfg.factor_exprs
@@ -184,6 +203,11 @@ async def run_quant_pipeline(
     if scores is None:
         return {"scores": None, "weights": pd.Series(dtype=float),
                 "orders": [], "equity": 0.0, "meta": {"error": "no scores"}}
+
+    result: dict[str, Any] = {
+        "scores": scores, "weights": pd.Series(dtype=float),
+        "orders": [], "equity": 0.0, "meta": {},
+    }
 
     # 2. 组合构建（含状态路由 + 风险模型协方差）
     method = cfg.method
@@ -213,10 +237,7 @@ async def run_quant_pipeline(
         return {"scores": scores, "weights": pd.Series(dtype=float),
                 "orders": [], "equity": 0.0, "meta": {"halted": True}}
 
-    result: dict[str, Any] = {
-        "scores": scores, "weights": weights,
-        "orders": [], "equity": 0.0, "meta": {},
-    }
+    result["weights"] = weights
     if regime_info:
         result["meta"]["regime"] = regime_info
     if cov is not None:
@@ -234,12 +255,29 @@ async def run_quant_pipeline(
     if broker is None:
         return result
 
+    # kill switch 预检（跨调用持久对象可能已熔断）
+    if kill_switch is not None and kill_switch.tripped:
+        result["meta"]["halted_by_kill_switch"] = True
+        return result
+
     try:
         acct = await broker.get_account()
         equity = float(getattr(acct, "equity", 0.0) or 0.0)
         if equity <= 0:
             equity = float(getattr(acct, "cash", 0.0) or 0.0)
         result["equity"] = equity
+
+        # kill switch 更新（单调用内建实例）
+        if kill_switch is None and cfg.kill_switch_dd > 0:
+            kill_switch = KillSwitch(max_drawdown=cfg.kill_switch_dd)
+        if kill_switch is not None:
+            killed = kill_switch.update(equity)
+            result["meta"]["kill_switch_tripped"] = kill_switch.tripped
+            result["meta"]["drawdown"] = round(kill_switch.current_drawdown, 4)
+            if killed:
+                result["meta"]["halted_by_kill_switch"] = True
+                return result
+            kill_switch.set_last_good(weights)  # 记录最后已知良好权重（自动回滚用）
 
         prices = _panel_last_prices(panel) if panel is not None else {}
         # 优先用 broker 行情补全
@@ -254,9 +292,44 @@ async def run_quant_pipeline(
         positions = await broker.get_positions()
         om = OrderManager(cfg.order_config or OrderManagerConfig())
         orders = om.generate_orders(weights, equity, prices, current_positions=positions)
+
+        # 成本门禁：预期收益需覆盖流动性+佣金成本
+        if cfg.use_cost_gate:
+            adv_map = _adv_from_panel(panel) if panel is not None else {}
+            liq = LiquidityEngine(adv=adv_map, max_participation=cfg.max_participation)
+            kept, gated = [], []
+            for o in orders:
+                est = liq.estimate(o.symbol, o.quantity, prices.get(o.symbol, 0.0),
+                                   adv_map.get(o.symbol))
+                edge = abs(float(weights.get(o.symbol, 0.0))) * cfg.edge_per_score_bps
+                if liq.cost_gate(edge, est):
+                    kept.append(o)
+                else:
+                    gated.append(o.symbol)
+            orders = kept
+            result["meta"]["cost_gated_out"] = gated
+
         placed = await om.submit(orders, broker)
         result["orders"] = placed
         result["meta"]["n_orders"] = len(placed)
+
+        # 持仓对账：内部预期（当前+成交）vs 券商实际
+        if cfg.use_reconcile:
+            from trader3.v2.live.broker_base import OrderSide, OrderStatus
+            broker_pos = {s: float(p.quantity)
+                          for s, p in (await broker.get_positions()).items()}
+            internal_after: dict[str, float] = {
+                s: float(p.quantity) for s, p in positions.items()}
+            for o in placed:
+                st = str(getattr(o, "status", ""))
+                if "filled" in st:
+                    q = float(getattr(o, "filled_qty", 0.0) or getattr(o, "quantity", 0.0))
+                    internal_after[o.symbol] = internal_after.get(o.symbol, 0.0) + (
+                        q if o.side == OrderSide.BUY else -q)
+            disc = reconcile_positions(internal_after, broker_pos)
+            result["meta"]["reconcile"] = [d.__dict__ for d in disc]
+            result["meta"]["reconcile_breaches"] = sum(
+                1 for d in disc if d.severity == "breach")
     except Exception as e:  # noqa: BLE001
         logger.warning("[quant_pipeline] 下单阶段异常: %s", e)
         result["meta"]["order_error"] = str(e)

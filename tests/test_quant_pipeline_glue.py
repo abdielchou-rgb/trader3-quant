@@ -7,7 +7,7 @@ import asyncio
 import numpy as np
 import pandas as pd
 
-from trader3.v2.live.broker_base import OrderSide, Position
+from trader3.v2.live.broker_base import BrokerBase, OrderSide, Position
 from trader3.v2.order_manager import OrderManager, OrderManagerConfig
 from trader3.v2.portfolio import PortfolioConfig, PortfolioConstruction, construct_portfolio
 from trader3.v2.quant_pipeline import QuantPipelineConfig, run_quant_pipeline
@@ -212,3 +212,163 @@ def test_quant_pipeline_with_moe():
     res = asyncio.run(run_quant_pipeline(panel, config=cfg))
     assert not res["weights"].empty
     assert res["weights"].sum() <= 1.0 + 1e-6
+
+
+# ───────────────────────── 执行层加固测试 ─────────────────────────
+
+
+def _make_panel_pos_vol(n_dates=80, n_assets=6, seed=11):
+    """与 _make_panel 类似，但 volume 为正（供流动性引擎 ADV 计算）。"""
+    rng = np.random.default_rng(seed)
+    dates = pd.date_range("2024-01-01", periods=n_dates, freq="D")
+    assets = [f"A{i}" for i in range(n_assets)]
+    fields = ["open", "high", "low", "close", "volume", "vwap", "amount"]
+    cols = pd.MultiIndex.from_product([assets, fields])
+    df = pd.DataFrame(rng.normal(size=(n_dates, len(cols))), index=dates, columns=cols)
+    for a in assets:
+        walk = np.cumsum(rng.normal(0, 1, n_dates))
+        df[(a, "close")] = walk + 100
+        df[(a, "vwap")] = df[(a, "close")]
+        df[(a, "volume")] = np.abs(rng.normal(1e5, 2e4, n_dates)) + 1e4
+    return df
+
+
+class FakeBroker(BrokerBase):
+    """测试用内存券商：下单即按市价全量成交并维护持仓。"""
+
+    def __init__(self, equity=1_000_000, prices=None, positions=None):
+        super().__init__()
+        self._equity = equity
+        self._prices = prices or {f"A{i}": 100.0 + i for i in range(8)}
+        self._positions = positions or {}
+        self._connected = True
+
+    async def connect(self):
+        return True
+
+    async def disconnect(self):
+        return True
+
+    async def place_order(self, order):
+        price = self._prices.get(order.symbol, 100.0)
+        order.status = OrderStatus.FILLED
+        order.filled_qty = order.quantity
+        order.avg_fill_price = price
+        q = order.quantity if order.side == OrderSide.BUY else -order.quantity
+        p = self._positions.get(order.symbol)
+        new_q = (p.quantity + q) if p else q
+        self._positions[order.symbol] = Position(
+            symbol=order.symbol, quantity=new_q, avg_cost=price,
+            market_value=new_q * price, unrealized_pnl=0.0, last_price=price)
+        return order
+
+    async def cancel_order(self, client_order_id):
+        return True
+
+    async def get_order(self, client_order_id):
+        return self._orders.get(client_order_id)
+
+    async def get_orders(self, status=None):
+        return list(self._orders.values())
+
+    async def get_positions(self):
+        return dict(self._positions)
+
+    async def get_account(self):
+        from trader3.v2.live.broker_base import Account
+        return Account(account_id="TEST", cash=self._equity, equity=self._equity,
+                       buying_power=self._equity)
+
+    async def get_market_data(self, symbols):
+        from trader3.v2.live.broker_base import MarketData
+        return {s: MarketData(symbol=s, price=self._prices.get(s, 100.0)) for s in symbols}
+
+    async def subscribe_market_data(self, symbols, callback):
+        return True
+
+    async def unsubscribe_market_data(self, symbols):
+        return True
+
+
+def test_liquidity_engine_estimate_and_gate():
+    from trader3.v2.execution import LiquidityEngine
+    eng = LiquidityEngine(adv={"AAA": 1e5}, max_participation=0.1)
+    est = eng.estimate("AAA", 1000, 100.0, adv=1e5)  # 参与率 1%
+    assert est.participation_rate == 0.01
+    assert est.tradable
+    # 预期收益 50bp 覆盖成本
+    assert eng.cost_gate(50.0, est)
+    # 预期收益 0.1bp 不覆盖
+    assert not eng.cost_gate(0.1, est)
+    # 超大单：参与率超限 → 不可交易
+    big = eng.estimate("AAA", 2e4, 100.0, adv=1e5)  # 参与率 20%
+    assert not big.tradable
+    assert not eng.cost_gate(100.0, big)
+
+
+def test_reconcile_positions_match_warn_breach():
+    from trader3.v2.execution import reconcile_positions
+    disc = reconcile_positions({"A": 100.0, "B": 50.0}, {"A": 100.0, "B": 50.0})
+    assert all(d.severity == "match" for d in disc)
+    disc = reconcile_positions({"A": 100.0}, {"A": 0.0})  # 差 100 远超阈值
+    assert disc[0].severity == "breach"
+    disc = reconcile_positions({"A": 100.0}, {"A": 100.0000001})  # 极小差
+    assert disc[0].severity == "match"
+
+
+def test_kill_switch_trip_and_rollback():
+    from trader3.v2.execution import KillSwitch
+    ks = KillSwitch(max_drawdown=0.05)
+    assert not ks.update(1_000_000)
+    ks.set_last_good({"A1": 0.5, "A2": 0.5})
+    assert not ks.update(970_000)   # -3% < 5% → 未熔断
+    assert not ks.tripped
+    assert ks.update(940_000)   # -6% > 5% → 熔断
+    assert ks.tripped
+    assert ks.rollback_weights() == {"A1": 0.5, "A2": 0.5}
+
+
+def test_pipeline_cost_gate_filters_orders():
+    panel = _make_panel_pos_vol(n_dates=120)
+    feats = {"f1": "sub(log(vwap), log(close))", "f2": "rank(close)"}
+    # 高 edge：不应被门禁剔除
+    cfg = QuantPipelineConfig(method="ic_weighted", use_moe=True,
+                              moe_experts=["lgbm", "et", "ridge"], min_train=60,
+                              factor_exprs=feats, use_cost_gate=True,
+                              edge_per_score_bps=500.0)
+    br = FakeBroker()
+    res = asyncio.run(run_quant_pipeline(panel, config=cfg, broker=br))
+    assert res["meta"].get("cost_gated_out") == []
+    n_high = res["meta"]["n_orders"]
+    # 极低 edge：全部剔除
+    cfg2 = QuantPipelineConfig(method="ic_weighted", use_moe=True,
+                               moe_experts=["lgbm", "et", "ridge"], min_train=60,
+                               factor_exprs=feats, use_cost_gate=True,
+                               edge_per_score_bps=0.05)
+    br2 = FakeBroker()
+    res2 = asyncio.run(run_quant_pipeline(panel, config=cfg2, broker=br2))
+    assert res2["meta"]["n_orders"] == 0
+    assert res2["meta"]["cost_gated_out"]
+    assert len(res2["meta"]["cost_gated_out"]) == n_high
+
+
+def test_pipeline_reconcile_and_kill_switch():
+    panel = _make_panel_pos_vol(n_dates=120)
+    feats = {"f1": "sub(log(vwap), log(close))", "f2": "rank(close)"}
+    cfg = QuantPipelineConfig(method="ic_weighted", use_moe=True,
+                              moe_experts=["lgbm", "et", "ridge"], min_train=60,
+                              factor_exprs=feats, use_reconcile=True)
+    br = FakeBroker()
+    res = asyncio.run(run_quant_pipeline(panel, config=cfg, broker=br))
+    assert res["meta"]["n_orders"] > 0
+    # 内存券商按成交更新持仓 → 对账一致（0 breach）
+    assert res["meta"]["reconcile_breaches"] == 0
+
+    # kill switch 已熔断 → 不下单
+    from trader3.v2.execution import KillSwitch
+    ks = KillSwitch(max_drawdown=0.05)
+    ks.tripped = True
+    br3 = FakeBroker()
+    res3 = asyncio.run(run_quant_pipeline(panel, config=cfg, broker=br3, kill_switch=ks))
+    assert res3["meta"].get("halted_by_kill_switch") is True
+    assert res3["meta"].get("n_orders", 0) == 0
