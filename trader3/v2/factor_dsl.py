@@ -132,19 +132,32 @@ class FactorDSL:
         return wrapper
 
     def _compile_gp_node(self, node: Node) -> Callable[[pd.DataFrame], pd.Series]:
-        """将 GP Node 编译为 panel -> scores 函数。"""
+        """将 GP Node 编译为 panel -> scores 函数（取最新一期截面）。"""
         def evaluator(panel: pd.DataFrame) -> pd.Series:
-            # panel: (date x (asset, field)) MultiIndex columns
-            # 解包为 {field: (T, N) array}
-            data = self._panel_to_arrays(panel)
-            result = evaluate(node, data)  # (T, N)
-            # 取最后一天，按 asset 对齐
+            result = self._eval_gp_full(node, panel)  # (T, N)
             if result.ndim == 2:
                 scores = pd.Series(result[-1], index=panel.columns.get_level_values(0).unique())
             else:
                 scores = pd.Series(result, index=panel.columns.get_level_values(0).unique())
             return scores
         return evaluator
+
+    def _eval_gp_full(self, node: Node, panel: pd.DataFrame) -> np.ndarray:
+        """对 GP Node 求全样本 (T, N) 结果（供 ensemble 历史使用）。"""
+        data = self._panel_to_arrays(panel)
+        return evaluate(node, data)
+
+    def full_series(self, expr: str, panel: pd.DataFrame) -> pd.DataFrame:
+        """编译 expr 并返回全样本宽表 (date × asset)，供 ensemble 使用。"""
+        cf = self.compile(expr)
+        if not cf.is_gp:
+            raise ValueError(f"full_series 仅支持 GP 表达式，收到: {expr}")
+        node = parse_expr(expr)
+        arr = self._eval_gp_full(node, panel)  # (T, N)
+        assets = list(panel.columns.get_level_values(0).unique())
+        if arr.ndim == 1:
+            arr = arr.reshape(1, -1)
+        return pd.DataFrame(arr, index=panel.index, columns=assets)
 
     def _collect_gp_deps(self, node: Node) -> list[str]:
         """收集 GP 树依赖的字段/库因子。"""
