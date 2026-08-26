@@ -21,9 +21,9 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from trader3.v2.execution import KillSwitch, LiquidityEngine, reconcile_positions
 from trader3.v2.order_manager import OrderManager, OrderManagerConfig
 from trader3.v2.portfolio import PortfolioConfig, PortfolioConstruction
-from trader3.v2.execution import KillSwitch, LiquidityEngine, reconcile_positions
 
 logger = logging.getLogger("trader3.v2.quant_pipeline")
 
