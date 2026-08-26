@@ -45,6 +45,7 @@ class QuantPipelineConfig:
     use_moe: bool = False                  # 多专家集成（门控融合）替代单一 ensemble
     moe_experts: list[str] | None = None   # 专家模型列表（None 用默认）
     ewma_cov_lambda: float = 0.94          # 协方差 EWMA 衰减
+    factor_registry_path: str | None = None  # 因子工厂仓库：通过闸门的因子并入 factor_exprs
     # ── 执行层加固 ──
     use_cost_gate: bool = False            # 流动性/冲击成本门禁（预期收益需覆盖成本）
     use_reconcile: bool = False            # 下单后与券商持仓对账
@@ -192,7 +193,18 @@ async def run_quant_pipeline(
     - kill_switch 可注入（跨调用持久），回撤超阈即不下单
     """
     cfg = config or QuantPipelineConfig()
-    factor_exprs = factor_exprs or cfg.factor_exprs
+    factor_exprs = dict(factor_exprs or cfg.factor_exprs or {})
+    # 并入因子工厂仓库中已通过闸门的因子
+    if cfg.factor_registry_path:
+        try:
+            from trader3.v2.factor_factory import FactorRegistry
+            reg = FactorRegistry(cfg.factor_registry_path)
+            mined = reg.as_factor_exprs()
+            if mined:
+                factor_exprs = {**mined, **factor_exprs}
+                logger.info("[quant_pipeline] 并入因子工厂仓库 %d 个因子", len(mined))
+        except Exception as e:  # noqa: BLE001
+            logger.warning("[quant_pipeline] 读取因子仓库失败: %s", e)
 
     # 1. 得分（因子 → ensemble）
     if scores is None and build_scores is not None:
