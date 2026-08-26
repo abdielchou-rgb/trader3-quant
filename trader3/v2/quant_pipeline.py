@@ -52,6 +52,9 @@ class QuantPipelineConfig:
     kill_switch_dd: float = 0.05           # 回撤熔断阈值
     edge_per_score_bps: float = 50.0       # 得分每单位→预期收益(bp)，用于成本门禁
     max_participation: float = 0.1         # 单笔参与率上限（流动性引擎）
+    # ── 嵌套执行 ──
+    use_nested_execution: bool = False     # 组合层+执行层联合优化（冲击回灌+交易轨迹）
+    nested_horizon: int = 5                # 执行跨度（期）
 
 
 # regime 标签 -> (方法, gross 敞口系数)
@@ -303,6 +306,33 @@ async def run_quant_pipeline(
 
         positions = await broker.get_positions()
         om = OrderManager(cfg.order_config or OrderManagerConfig())
+        from trader3.v2.live.broker_base import OrderSide
+
+        # 嵌套执行：用冲击成本回灌重新求解可执行权重 + 交易轨迹
+        if cfg.use_nested_execution and panel is not None:
+            try:
+                from trader3.v2.nested_execution import NestedExecutor, NestedExecutorConfig
+                if isinstance(scores, pd.DataFrame) and isinstance(
+                        scores.index, pd.MultiIndex):
+                    alpha = scores.xs(scores.index.get_level_values(0)[-1], level=0)
+                else:
+                    alpha = scores
+                ne_cov = _asset_covariance(_asset_returns(panel), cfg.ewma_cov_lambda)
+                ne = NestedExecutor(NestedExecutorConfig(horizon=cfg.nested_horizon))
+                plan = ne.solve(alpha, ne_cov, weights, equity,
+                                prices, _adv_from_panel(panel))
+                weights = plan.target_weights
+                result["weights"] = weights
+                result["meta"]["execution_plan"] = {
+                    "expected_cost_bps": plan.expected_cost_bps,
+                    "expected_shortfall": plan.expected_shortfall,
+                    "n_slices": len(plan.schedule),
+                    "horizon": cfg.nested_horizon,
+                    "n_target_assets": int((plan.target_weights.abs() > 1e-6).sum()),
+                }
+            except Exception as e:  # noqa: BLE001
+                logger.warning("[quant_pipeline] 嵌套执行失败，退回原权重: %s", e)
+
         orders = om.generate_orders(weights, equity, prices, current_positions=positions)
 
         # 成本门禁：预期收益需覆盖流动性+佣金成本
@@ -327,7 +357,6 @@ async def run_quant_pipeline(
 
         # 持仓对账：内部预期（当前+成交）vs 券商实际
         if cfg.use_reconcile:
-            from trader3.v2.live.broker_base import OrderSide
             broker_pos = {s: float(p.quantity)
                           for s, p in (await broker.get_positions()).items()}
             internal_after: dict[str, float] = {
