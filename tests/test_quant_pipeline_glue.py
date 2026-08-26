@@ -123,3 +123,37 @@ def test_quant_pipeline_no_broker_scores_only():
                                          config=QuantPipelineConfig(method="ic_weighted")))
     assert res["weights"].sum() <= 1.0 + 1e-6
     assert res["orders"] == []
+
+
+def test_quant_pipeline_with_regime_routing():
+    panel = _make_panel(n_dates=120)
+    scores = pd.Series({f"A{i}": 0.1 * i for i in range(6)})
+    cfg = QuantPipelineConfig(method="ic_weighted", use_regime=True, factor_exprs={})
+    res = asyncio.run(run_quant_pipeline(panel, scores=scores, config=cfg))
+    # 状态检测应写入 meta，且权重合法
+    assert "regime" in res["meta"]
+    assert res["weights"].sum() <= 1.0 + 1e-6
+    assert res["meta"]["regime"]["label"] in (
+        "low-vol", "mid-vol", "high-vol", "calm", "turbulent")
+
+
+def test_quant_pipeline_with_risk_model_cov():
+    panel = _make_panel(n_dates=120)
+    scores = pd.Series({f"A{i}": 0.1 * i for i in range(6)})
+    # 用 risk_budget 触发协方差接入
+    cfg = QuantPipelineConfig(method="risk_budget", risk_model_cov=True, factor_exprs={})
+    res = asyncio.run(run_quant_pipeline(panel, scores=scores, config=cfg))
+    assert res["weights"].sum() <= 1.0 + 1e-6
+    assert res["meta"].get("cov_source") == "panel_ewma"
+
+
+def test_quant_pipeline_with_risk_attribution():
+    panel = _make_panel(n_dates=200, n_assets=30)
+    scores = pd.Series({f"A{i}": (i % 5) - 2.0 for i in range(30)})
+    cfg = QuantPipelineConfig(method="ic_weighted", risk_attribution=True, factor_exprs={})
+    res = asyncio.run(run_quant_pipeline(panel, scores=scores, config=cfg))
+    assert "risk_decomp" in res["meta"]
+    # 30 资产足以支撑 Barra 风格分解，应产出真实风险数字
+    decomp = res["meta"]["risk_decomp"]
+    assert decomp.get("total_risk", 0.0) > 0.0
+    assert "factor_exposure" in decomp
