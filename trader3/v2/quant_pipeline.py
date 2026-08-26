@@ -315,7 +315,7 @@ async def run_quant_pipeline(
 
         # 持仓对账：内部预期（当前+成交）vs 券商实际
         if cfg.use_reconcile:
-            from trader3.v2.live.broker_base import OrderSide, OrderStatus
+            from trader3.v2.live.broker_base import OrderSide
             broker_pos = {s: float(p.quantity)
                           for s, p in (await broker.get_positions()).items()}
             internal_after: dict[str, float] = {
