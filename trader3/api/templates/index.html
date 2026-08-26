@@ -1,0 +1,290 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Trader3 Dashboard</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body class="bg-gray-900 text-white">
+    <div class="container mx-auto p-4">
+        <header class="mb-6 flex justify-between items-center">
+            <h1 class="text-3xl font-bold">Trader3 Dashboard</h1>
+            <div class="flex gap-4">
+                <span id="connection-status" class="px-3 py-1 rounded bg-red-600">Disconnected</span>
+                <span id="timestamp" class="text-gray-400"></span>
+            </div>
+        </header>
+
+        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+            <div class="bg-gray-800 p-4 rounded-lg">
+                <div class="text-gray-400 text-sm">Equity</div>
+                <div id="equity" class="text-2xl font-bold">$0.00</div>
+            </div>
+            <div class="bg-gray-800 p-4 rounded-lg">
+                <div class="text-gray-400 text-sm">Cash</div>
+                <div id="cash" class="text-2xl font-bold">$0.00</div>
+            </div>
+            <div class="bg-gray-800 p-4 rounded-lg">
+                <div class="text-gray-400 text-sm">Buying Power</div>
+                <div id="buying-power" class="text-2xl font-bold">$0.00</div>
+            </div>
+            <div class="bg-gray-800 p-4 rounded-lg">
+                <div class="text-gray-400 text-sm">Positions</div>
+                <div id="positions-count" class="text-2xl font-bold">0</div>
+            </div>
+        </div>
+
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
+            <div class="lg:col-span-2 bg-gray-800 p-4 rounded-lg">
+                <h2 class="text-xl font-bold mb-4">Equity Curve</h2>
+                <canvas id="equity-chart" height="300"></canvas>
+            </div>
+            <div class="bg-gray-800 p-4 rounded-lg">
+                <h2 class="text-xl font-bold mb-4">Quick Trade</h2>
+                <form id="trade-form" class="space-y-3">
+                    <div>
+                        <label class="block text-sm text-gray-400">Symbol</label>
+                        <input type="text" id="trade-symbol" class="w-full bg-gray-700 p-2 rounded" placeholder="AAPL" value="AAPL">
+                    </div>
+                    <div>
+                        <label class="block text-sm text-gray-400">Side</label>
+                        <select id="trade-side" class="w-full bg-gray-700 p-2 rounded">
+                            <option value="buy">Buy</option>
+                            <option value="sell">Sell</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="block text-sm text-gray-400">Quantity</label>
+                        <input type="number" id="trade-qty" class="w-full bg-gray-700 p-2 rounded" value="100" step="1">
+                    </div>
+                    <div>
+                        <label class="block text-sm text-gray-400">Order Type</label>
+                        <select id="trade-type" class="w-full bg-gray-700 p-2 rounded">
+                            <option value="market">Market</option>
+                            <option value="limit">Limit</option>
+                        </select>
+                    </div>
+                    <div id="limit-price-field" class="hidden">
+                        <label class="block text-sm text-gray-400">Limit Price</label>
+                        <input type="number" id="trade-price" class="w-full bg-gray-700 p-2 rounded" step="0.01">
+                    </div>
+                    <button type="submit" class="w-full bg-green-600 hover:bg-green-700 p-2 rounded">Place Order</button>
+                </form>
+                <div id="trade-result" class="mt-3 p-3 rounded hidden"></div>
+            </div>
+        </div>
+
+        <div class="mt-6 bg-gray-800 p-4 rounded-lg">
+            <h2 class="text-xl font-bold mb-4">Positions</h2>
+            <div class="overflow-x-auto">
+                <table class="w-full">
+                    <thead>
+                        <tr class="text-left text-gray-400 border-b border-gray-700">
+                            <th class="pb-2">Symbol</th>
+                            <th class="pb-2">Qty</th>
+                            <th class="pb-2">Avg Cost</th>
+                            <th class="pb-2">Market Value</th>
+                            <th class="pb-2">Unrealized PnL</th>
+                            <th class="pb-2">Last Price</th>
+                        </tr>
+                    </thead>
+                    <tbody id="positions-table" class="text-gray-300">
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <div class="mt-6 bg-gray-800 p-4 rounded-lg">
+            <h2 class="text-xl font-bold mb-4">Orders</h2>
+            <div class="overflow-x-auto">
+                <table class="w-full">
+                    <thead>
+                        <tr class="text-left text-gray-400 border-b border-gray-700">
+                            <th class="pb-2">ID</th>
+                            <th class="pb-2">Symbol</th>
+                            <th class="pb-2">Side</th>
+                            <th class="pb-2">Qty</th>
+                            <th class="pb-2">Type</th>
+                            <th class="pb-2">Price</th>
+                            <th class="pb-2">Status</th>
+                            <th class="pb-2">Filled</th>
+                            <th class="pb-2">Time</th>
+                        </tr>
+                    </thead>
+                    <tbody id="orders-table" class="text-gray-300">
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const ws = new WebSocket(`ws://${location.host}/ws`);
+        let equityChart = null;
+        let equityData = [];
+
+        ws.onopen = () => {
+            document.getElementById('connection-status').textContent = 'Connected';
+            document.getElementById('connection-status').className = 'px-3 py-1 rounded bg-green-600';
+            fetchData();
+        };
+
+        ws.onclose = () => {
+            document.getElementById('connection-status').textContent = 'Disconnected';
+            document.getElementById('connection-status').className = 'px-3 py-1 rounded bg-red-600';
+        };
+
+        ws.onmessage = (event) => {
+            const msg = JSON.parse(event.data);
+            if (msg.type === 'portfolio_update') {
+                updatePortfolio(msg.data);
+            }
+        };
+
+        async function fetchData() {
+            await Promise.all([
+                fetchAccount(),
+                fetchPositions(),
+                fetchOrders(),
+            ]);
+        }
+
+        async function fetchAccount() {
+            const res = await fetch('/api/account');
+            const data = await res.json();
+            if (data.equity !== undefined) {
+                updatePortfolio(data);
+            }
+        }
+
+        function updatePortfolio(data) {
+            document.getElementById('equity').textContent = `$${data.equity.toLocaleString()}`;
+            document.getElementById('cash').textContent = `$${data.cash.toLocaleString()}`;
+            document.getElementById('buying-power').textContent = `$${data.buying_power.toLocaleString()}`;
+            document.getElementById('positions-count').textContent = data.positions_count || data.positions || 0;
+            document.getElementById('timestamp').textContent = new Date(data.timestamp || Date.now()).toLocaleTimeString();
+
+            equityData.push({time: Date.now(), equity: data.equity});
+            if (equityData.length > 100) equityData.shift();
+            updateChart();
+        }
+
+        function updateChart() {
+            if (!equityChart) {
+                const ctx = document.getElementById('equity-chart').getContext('2d');
+                equityChart = new Chart(ctx, {
+                    type: 'line',
+                    data: {
+                        datasets: [{
+                            label: 'Equity',
+                            data: equityData.map(d => ({x: d.time, y: d.equity})),
+                            borderColor: '#22c55e',
+                            backgroundColor: 'rgba(34, 197, 94, 0.1)',
+                            fill: true,
+                            tension: 0.1,
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        scales: {
+                            x: {type: 'time', time: {unit: 'second'}},
+                            y: {beginAtZero: false}
+                        },
+                        plugins: {legend: {display: false}}
+                    }
+                });
+            } else {
+                equityChart.data.datasets[0].data = equityData.map(d => ({x: d.time, y: d.equity}));
+                equityChart.update('none');
+            }
+        }
+
+        async function fetchPositions() {
+            const res = await fetch('/api/positions');
+            const data = await res.json();
+            const tbody = document.getElementById('positions-table');
+            tbody.innerHTML = Object.entries(data).map(([sym, pos]) => `
+                <tr class="border-b border-gray-700">
+                    <td class="py-2 font-mono">${sym}</td>
+                    <td class="py-2">${pos.quantity}</td>
+                    <td class="py-2">$${pos.avg_cost.toFixed(2)}</td>
+                    <td class="py-2">$${pos.market_value.toLocaleString()}</td>
+                    <td class="py-2 ${pos.unrealized_pnl >= 0 ? 'text-green-400' : 'text-red-400'}">$${pos.unrealized_pnl.toFixed(2)}</td>
+                    <td class="py-2">$${pos.last_price?.toFixed(2) || 'N/A'}</td>
+                </tr>
+            `).join('');
+        }
+
+        async function fetchOrders() {
+            const res = await fetch('/api/orders');
+            const data = await res.json();
+            const tbody = document.getElementById('orders-table');
+            tbody.innerHTML = (data.orders || []).map(o => `
+                <tr class="border-b border-gray-700">
+                    <td class="py-2 font-mono text-xs">${o.client_order_id.slice(0,8)}</td>
+                    <td class="py-2">${o.symbol}</td>
+                    <td class="py-2 ${o.side === 'buy' ? 'text-green-400' : 'text-red-400'}">${o.side.toUpperCase()}</td>
+                    <td class="py-2">${o.quantity}</td>
+                    <td class="py-2">${o.order_type}</td>
+                    <td class="py-2">${o.price ? '$' + o.price : 'Market'}</td>
+                    <td class="py-2">${getStatusBadge(o.status)}</td>
+                    <td class="py-2">${o.filled_qty}</td>
+                    <td class="py-2 text-xs">${new Date(o.created_at).toLocaleTimeString()}</td>
+                </tr>
+            `).join('');
+        }
+
+        function getStatusBadge(status) {
+            const colors = {
+                'pending': 'bg-yellow-600',
+                'submitted': 'bg-blue-600',
+                'filled': 'bg-green-600',
+                'cancelled': 'bg-gray-600',
+                'rejected': 'bg-red-600',
+            };
+            return `<span class="px-2 py-1 rounded text-xs ${colors[status] || 'bg-gray-600'}">${status.toUpperCase()}</span>`;
+        }
+
+        document.getElementById('trade-type').addEventListener('change', (e) => {
+            document.getElementById('limit-price-field').classList.toggle('hidden', e.target.value !== 'limit');
+        });
+
+        document.getElementById('trade-form').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const form = e.target;
+            const order = {
+                symbol: document.getElementById('trade-symbol').value,
+                side: document.getElementById('trade-side').value,
+                quantity: parseFloat(document.getElementById('trade-qty').value),
+                order_type: document.getElementById('trade-type').value,
+            };
+            if (order.order_type === 'limit') {
+                order.price = parseFloat(document.getElementById('trade-price').value);
+            }
+
+            const res = await fetch('/api/orders', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify(order),
+            });
+            const result = await res.json();
+            const resultDiv = document.getElementById('trade-result');
+            resultDiv.classList.remove('hidden');
+            if (result.status === 'filled') {
+                resultDiv.className = 'mt-3 p-3 rounded bg-green-900';
+                resultDiv.innerHTML = `Order filled: ${result.filled_qty} @ $${result.avg_fill_price}`;
+            } else {
+                resultDiv.className = 'mt-3 p-3 rounded bg-red-900';
+                resultDiv.innerHTML = `Order ${result.status}: ${result.client_order_id}`;
+            }
+            fetchOrders();
+            fetchAccount();
+        });
+
+        setInterval(fetchData, 5000);
+    </script>
+</body>
+</html>
