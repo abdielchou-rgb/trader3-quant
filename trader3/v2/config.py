@@ -28,6 +28,16 @@ class Settings:
     ctp_app_id: str = "simnow_client_test"
     paper_trade: bool = True
     log_level: str = "INFO"
+    # 量化主链路
+    quant_method: str = "ic_weighted"
+    kill_switch_dd: float = 0.05
+    nested_execution: bool = False
+    factory_refresh: bool = False
+    factory_every_n: int = 5
+    legacy_daily: bool = False
+    lookback_days: int = 250
+    universe: str = ""          # 逗号分隔标的；非空则启用自主面板
+    shadow_mode: bool = False   # 影子模式（真实券商仅空跑）
 
     @classmethod
     def load(cls, environ: dict | None = None) -> Settings:
@@ -51,6 +61,17 @@ class Settings:
             ctp_app_id=g("CTP_APP_ID", cls.ctp_app_id),
             paper_trade=g("PAPER_TRADE", "true").strip().lower() in ("1", "true", "yes"),
             log_level=g("LOG_LEVEL", cls.log_level),
+            quant_method=g("QUANT_METHOD", cls.quant_method),
+            kill_switch_dd=float(g("KILL_SWITCH_DD", str(cls.kill_switch_dd))),
+            nested_execution=g("NESTED_EXECUTION", "false").strip().lower()
+            in ("1", "true", "yes"),
+            factory_refresh=g("FACTORY_REFRESH", "false").strip().lower()
+            in ("1", "true", "yes"),
+            factory_every_n=int(g("FACTORY_EVERY_N", str(cls.factory_every_n))),
+            legacy_daily=g("LEGACY_DAILY", "false").strip().lower() in ("1", "true", "yes"),
+            lookback_days=int(g("LOOKBACK_DAYS", str(cls.lookback_days))),
+            universe=g("UNIVERSE", cls.universe),
+            shadow_mode=g("SHADOW_MODE", "false").strip().lower() in ("1", "true", "yes"),
         )
 
     def ctp_config(self) -> dict:
@@ -64,6 +85,9 @@ class Settings:
             "ctp_investor_id": self.ctp_investor_id,
             "ctp_app_id": self.ctp_app_id,
         }
+
+    def universe_list(self) -> list[str]:
+        return [u.strip() for u in self.universe.split(",") if u.strip()]
 
     def has_llm(self) -> bool:
         return bool(self.openrouter_api_key)

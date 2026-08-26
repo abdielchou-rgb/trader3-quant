@@ -114,7 +114,10 @@ class CTPBroker(BrokerBase):
         self._positions: dict[str, Position] = {}
         self._account = Account(
             account_id=self.investor_id or self.user_id,
-            cash=0.0, equity=0.0, buying_power=0.0, positions={},
+            cash=float(cfg.get("initial_cash", 1_000_000.0)),
+            equity=float(cfg.get("initial_cash", 1_000_000.0)),
+            buying_power=float(cfg.get("initial_cash", 1_000_000.0)),
+            positions={},
         )
         self._md_subs: dict[str, Callable] = {}
         self._sim_prices: dict[str, float] = {}

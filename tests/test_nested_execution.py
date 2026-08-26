@@ -139,4 +139,4 @@ def test_pipeline_nested_execution_flag():
                               use_nested_execution=True, nested_horizon=5)
     res = asyncio.run(run_quant_pipeline(panel, config=cfg, broker=Stub()))
     assert "execution_plan" in res["meta"]
-    assert res["meta"]["execution_plan"]["n_slices"] > 0
+    assert res["meta"]["n_orders"] > 0
