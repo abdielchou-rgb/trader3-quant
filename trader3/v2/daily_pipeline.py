@@ -42,12 +42,16 @@ def run_daily(
     collect_flow: bool = True,
     dry_run: bool = False,
     paper_trading: bool = True,
+    overlay=None,
 ) -> dict:
     """当日全量扫描。返回 {collected, results, alerts, paper_trading}。
 
     dry_run=True：采集照常，扫描只报告，不迁移状态不写库（含纸面账户）。
     paper_trading=True：对触发买入信号执行纸面下单并写 account.json；
         全程为模拟撮合——纸面交易，非真实委托。
+    overlay：可选 trader3.v2.risk_overlay.OverlayResult——组合级风险覆盖层，
+        调节每单资金比例（size_multiplier）或暂停新开仓（halt_new_buys）。
+        由调用方经 compute_risk_overlay 预先计算；缺省 None 行为不变。
     """
     from trader3.v2.collector import DataCollector
     from trader3.v2.trigger import apply_trigger_transition, get_trigger_engine
@@ -95,10 +99,16 @@ def run_daily(
     paper_state = None
     if paper_trading and not dry_run:
         try:
-            paper_state = run_paper_trades(triggered)
+            paper_state = run_paper_trades(triggered, overlay=overlay)
         except Exception as e:
             logger.warning("[daily] 纸面交易执行失败（跳过不影响主链路）: %s", e)
     summary["paper_trading"] = paper_state
+    if overlay is not None:
+        try:
+            from trader3.v2.risk_overlay import summarize as _ov_sum
+            summary["risk_overlay"] = _ov_sum(overlay)
+        except Exception:
+            pass
 
     summary["mode"] = "dry_run" if dry_run else "full"
     summary["scanned"] = len(results)
@@ -107,12 +117,14 @@ def run_daily(
     return summary
 
 
-def run_paper_trades(triggered_results: list) -> dict:
+def run_paper_trades(triggered_results: list, overlay=None) -> dict:
     """对触发的买卖信号逐只纸面下单，并把账户状态原子落盘。
 
     - 账户持久化于 shared_state/paper/account.json（SharedState.write_json）：
       {as_of, date, cash, positions, trades_today, equity, ...}
     - 每单资金 = 总资产 × PAPER_TRADE_PCT，按一手（100股）整数取整
+    - overlay：可选风险覆盖层——halt_new_buys 时跳过全部买入；
+      否则每单比例 = PAPER_TRADE_PCT × size_multiplier
     - 卖出信号：对纸面持仓该标的可卖量整单市价卖出
       （Fillers 模拟成交，佣金/印花税按 costs 费率；无持仓记 no_position）
     - 行情快照统一经 qa_accessor.get_quote_snapshot（换源只改一处）
@@ -122,6 +134,7 @@ def run_paper_trades(triggered_results: list) -> dict:
     from trader3.shared_state import SharedState
     from trader3.v2.execution_realism import PositionT1Account
     from trader3.v2.qa_accessor import get_quote_snapshot
+    from trader3.v2.risk_overlay import apply_to_trade_pct
 
     ss = SharedState(PAPER_STATE_DIR)
     prev = ss.read_json("account") or {}
@@ -133,6 +146,12 @@ def run_paper_trades(triggered_results: list) -> dict:
     if prev.get("as_of") != today:      # 跨日：解冻 + 计数复位，重开交易日流水
         acct.settle()
         trades_today = []
+
+    effective_pct = apply_to_trade_pct(PAPER_TRADE_PCT, overlay) \
+        if overlay is not None else PAPER_TRADE_PCT
+    halt_buys = bool(overlay is not None and getattr(overlay, "halt_new_buys", False))
+    if halt_buys:
+        logger.warning("[overlay] 风险覆盖层熔断：今日暂停全部新开仓")
 
     latest_prices: dict[str, float] = {}
     _daily_pnl_start_equity = acct.total_assets()
@@ -198,6 +217,12 @@ def run_paper_trades(triggered_results: list) -> dict:
             continue
         if direction != "buy":
             continue  # 纸面段只接已过风控的买入信号
+        if halt_buys:
+            rec.update({"ok": False, "side": "buy",
+                        "msg": "风险覆盖层熔断：暂停新开仓"})
+            trades_today.append(rec)
+            logger.warning("[纸面交易，非真实委托] %s 覆盖层熔断，买入跳过", code)
+            continue
         snap = get_quote_snapshot(code)
         price = float(snap.get("price") or 0.0)
         if price <= 0:
@@ -206,7 +231,7 @@ def run_paper_trades(triggered_results: list) -> dict:
             logger.info("[纸面交易，非真实委托] %s 无行情价，跳过", code)
             continue
         latest_prices[code] = price
-        budget = acct.total_assets() * PAPER_TRADE_PCT
+        budget = acct.total_assets() * effective_pct
         volume = int(budget // (price * PAPER_LOT_SIZE)) * PAPER_LOT_SIZE
         if volume <= 0:
             rec.update({"ok": False, "side": "buy",
