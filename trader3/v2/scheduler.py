@@ -15,7 +15,8 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from dataclasses import dataclass
+from collections.abc import Callable
+from dataclasses import dataclass, field
 from datetime import datetime, time
 from pathlib import Path
 from typing import Any
@@ -35,6 +36,11 @@ class SchedulerConfig:
     factor_factory_path: str = "shared_state/factor_registry.json"
     legacy_daily: bool = False          # 是否同时跑触发式 daily_pipeline
     min_run_interval_hours: float = 6.0
+    # 自主面板抓取
+    auto_panel: bool = False             # 未显式传 panel 时自动构建
+    universe: list[str] = field(default_factory=list)
+    lookback_days: int = 250
+    panel_source: Callable | None = None  # source(code, lookback, end) -> 日线 DF
 
 
 @dataclass
@@ -110,6 +116,12 @@ class QuantScheduler:
         now = datetime.now()
         run_count = int(self.state.get("run_count", 0)) + 1
         factory_refreshed = False
+
+        # 0. 自主面板抓取（未显式传入 panel 时）
+        if panel is None and self.config.auto_panel and self.config.universe:
+            from trader3.v2.panel_builder import build_panel
+            panel = build_panel(self.config.universe, self.config.lookback_days,
+                                source=self.config.panel_source)
 
         # 1. 可选刷新因子工厂（每 N 步）
         if self.config.enable_factor_factory_refresh and panel is not None \

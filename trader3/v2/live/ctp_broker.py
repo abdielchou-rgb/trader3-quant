@@ -386,25 +386,248 @@ class CTPBroker(BrokerBase):
             return
         await self._ctp_qry_investor_position()
 
-    # ── 真实 CTP 接入占位（需 vnpy_ctp）─────────────
+    # ── 真实 CTP 接入（需 vnpy_ctp；未安装时恒走 SIMULATED）─────────────
 
-    async def _ctp_connect_real(self) -> bool:  # pragma: no cover
-        raise NotImplementedError("真实 CTP 接入需要 vnpy_ctp 及柜台配置。")
+    async def _ctp_connect_real(self) -> bool:
+        if not _HAS_CTP:
+            raise NotImplementedError("真实 CTP 接入需要 vnpy_ctp 及柜台配置。")
+        from vnpy_ctp.api import MdApi, TraderApi
 
-    async def _ctp_login_real(self) -> bool:  # pragma: no cover
-        raise NotImplementedError
+        class _MdSpi(MdApi):
+            def __init__(self, brk):
+                super().__init__()
+                self.brk = brk
 
-    async def _ctp_logout_real(self) -> bool:  # pragma: no cover
-        raise NotImplementedError
+            def OnFrontConnected(self):
+                self.brk._md_connected.set()
 
-    async def _ctp_req_order_insert(self, order: Order, ctp_order: dict) -> None:  # pragma: no cover
-        raise NotImplementedError
+            def OnFrontDisconnected(self, n):
+                self.brk._set_state(ConnState.DISCONNECTED)
 
-    async def _ctp_req_order_action(self, order: Order) -> None:  # pragma: no cover
-        raise NotImplementedError
+            def OnRspUserLogin(self, p, info, rid, last):
+                if info and getattr(info, "ErrorID", 0) == 0:
+                    self.brk._md_logged.set()
 
-    async def _ctp_qry_trading_account(self) -> None:  # pragma: no cover
-        raise NotImplementedError
+            def OnRtnDepthMarketData(self, d):
+                self.brk._on_md_tick(d)
 
-    async def _ctp_qry_investor_position(self) -> None:  # pragma: no cover
-        raise NotImplementedError
+        class _TdSpi(TraderApi):
+            def __init__(self, brk):
+                super().__init__()
+                self.brk = brk
+
+            def OnFrontConnected(self):
+                self.brk._td_connected.set()
+
+            def OnFrontDisconnected(self, n):
+                self.brk._set_state(ConnState.DISCONNECTED)
+
+            def OnRspUserLogin(self, p, info, rid, last):
+                if info and getattr(info, "ErrorID", 0) == 0:
+                    self.brk._td_logged.set()
+                else:
+                    self.brk._td_login_err = info
+
+            def OnRspOrderInsert(self, p, info, rid, last):
+                self.brk._on_ctp_err(info, rid)
+
+            def OnRspOrderAction(self, p, info, rid, last):
+                self.brk._on_ctp_err(info, rid)
+
+            def OnRtnOrder(self, p):
+                self.brk._on_rtn_order(p)
+
+            def OnRtnTrade(self, p):
+                self.brk._on_rtn_trade(p)
+
+            def OnRspQryTradingAccount(self, p, info, rid, last):
+                self.brk._on_qry_account(p)
+
+            def OnRspQryInvestorPosition(self, p, info, rid, last):
+                self.brk._on_qry_position(p)
+
+        self._md_connected = asyncio.Event()
+        self._md_logged = asyncio.Event()
+        self._td_connected = asyncio.Event()
+        self._td_logged = asyncio.Event()
+        self._td_login_err = None
+
+        self._md_api = _MdSpi(self)
+        self._md_api.RegisterFront(self.md_front)
+        self._md_api.Init()
+        self._td_api = _TdSpi(self)
+        self._td_api.RegisterFront(self.front)
+        self._td_api.SubscribePrivateTopic(0)
+        self._td_api.Init()
+        try:
+            await asyncio.wait_for(self._td_connected.wait(), 10)
+        except asyncio.TimeoutError:
+            self._set_state(ConnState.ERROR)
+            return False
+        return True
+
+    async def _ctp_login_real(self) -> bool:
+        from vnpy_ctp.api import ReqUserLoginField
+
+        req = ReqUserLoginField()
+        req.BrokerID = self.broker_id
+        req.UserID = self.user_id
+        req.Password = self.password
+        req.UserProductInfo = "trader3"
+        self._td_api.ReqUserLogin(req, self._next_req_id())
+        try:
+            await asyncio.wait_for(self._td_logged.wait(), 10)
+        except asyncio.TimeoutError:
+            self._set_state(ConnState.ERROR)
+            return False
+        if self._td_login_err is not None:
+            self._set_state(ConnState.ERROR)
+            return False
+        # 行情登录
+        mreq = ReqUserLoginField()
+        mreq.BrokerID = self.broker_id
+        mreq.UserID = self.user_id
+        mreq.Password = self.password
+        self._md_api.ReqUserLogin(mreq, self._next_req_id())
+        try:
+            await asyncio.wait_for(self._md_logged.wait(), 10)
+        except asyncio.TimeoutError:
+            pass
+        return True
+
+    async def _ctp_logout_real(self) -> bool:
+        try:
+            from vnpy_ctp.api import ReqUserLogoutField
+            if getattr(self, "_td_api", None):
+                req = ReqUserLogoutField()
+                req.BrokerID = self.broker_id
+                req.UserID = self.user_id
+                self._td_api.ReqUserLogout(req, self._next_req_id())
+            if getattr(self, "_md_api", None):
+                mreq = ReqUserLogoutField()
+                mreq.BrokerID = self.broker_id
+                mreq.UserID = self.user_id
+                self._md_api.ReqUserLogout(mreq, self._next_req_id())
+        except Exception:  # noqa: BLE001
+            pass
+        return True
+
+    async def _ctp_req_order_insert(self, order: Order, ctp_order: dict) -> None:
+        from vnpy_ctp.api import InputOrderField
+
+        o = InputOrderField()
+        o.InstrumentID = ctp_order["instrument_id"]
+        o.Direction = ctp_order["direction"]
+        o.CombOffsetFlag = ctp_order["offset"]
+        o.CombHedgeFlag = "1"
+        o.VolumeTotalOriginal = ctp_order["volume"]
+        o.LimitPrice = ctp_order["price"]
+        o.OrderPriceType = ctp_order["price_type"]
+        o.TimeCondition = ctp_order["time_condition"]
+        o.VolumeCondition = ctp_order["volume_condition"]
+        o.ContingentCondition = "1"
+        o.MinVolume = 0
+        o.ForceCloseReason = "0"
+        o.OrderRef = ctp_order["order_ref"]
+        o.RequestID = self._next_req_id()
+        o.InvestorID = self.investor_id
+        o.UserID = self.user_id
+        o.BrokerID = self.broker_id
+        self._td_api.ReqOrderInsert(o, o.RequestID)
+
+    async def _ctp_req_order_action(self, order: Order) -> None:
+        from vnpy_ctp.api import InputOrderActionField
+
+        a = InputOrderActionField()
+        a.InstrumentID = order.symbol
+        a.OrderRef = order.broker_order_id
+        a.FrontID = getattr(self, "_front_id", "")
+        a.SessionID = getattr(self, "_session_id", "")
+        a.ActionFlag = "0"  # 撤单
+        a.InvestorID = self.investor_id
+        a.UserID = self.user_id
+        a.BrokerID = self.broker_id
+        self._td_api.ReqOrderAction(a, self._next_req_id())
+
+    async def _ctp_qry_trading_account(self) -> None:
+        from vnpy_ctp.api import QryTradingAccountField
+        self._td_api.ReqQryTradingAccount(QryTradingAccountField(), self._next_req_id())
+
+    async def _ctp_qry_investor_position(self) -> None:
+        from vnpy_ctp.api import QryInvestorPositionField
+        q = QryInvestorPositionField()
+        q.BrokerID = self.broker_id
+        q.InvestorID = self.investor_id
+        self._td_api.ReqQryInvestorPosition(q, self._next_req_id())
+
+    # ── CTP 回调处理 ───────────────────────────────
+    def _on_md_tick(self, d) -> None:
+        sym = getattr(d, "InstrumentID", None)
+        px = float(getattr(d, "LastPrice", 0.0) or 0.0)
+        if sym:
+            self._sim_prices[sym] = px
+            cb = self._md_subs.get(sym)
+            if cb:
+                md = MarketData(symbol=sym, last_price=px, open=getattr(d, "OpenPrice", px),
+                                high=getattr(d, "HighestPrice", px), low=getattr(d, "LowestPrice", px),
+                                volume=int(getattr(d, "Volume", 0) or 0), timestamp=time.time())
+                try:
+                    if asyncio.iscoroutinefunction(cb):
+                        asyncio.ensure_future(cb(sym, md))
+                    else:
+                        cb(sym, md)
+                except Exception:  # noqa: BLE001
+                    pass
+
+    def _on_rtn_order(self, p) -> None:
+        ref = getattr(p, "OrderRef", "")
+        order = self._orders.get(ref)
+        if not order:
+            return
+        status_map = {"0": OrderStatus.SUBMITTED, "1": OrderStatus.PARTIAL,
+                      "3": OrderStatus.FILLED, "5": OrderStatus.CANCELLED,
+                      "4": OrderStatus.REJECTED}
+        st = status_map.get(str(getattr(p, "OrderStatus", "")), OrderStatus.SUBMITTED)
+        order.status = st
+        order.filled_qty = float(getattr(p, "VolumeTraded", 0) or 0)
+        self._update_order(order)
+
+    def _on_rtn_trade(self, p) -> None:
+        ref = getattr(p, "OrderRef", "")
+        order = self._orders.get(ref)
+        if not order:
+            return
+        order.filled_qty = float(getattr(p, "VolumeTraded", 0) or 0)
+        order.avg_fill_price = float(getattr(p, "Price", 0.0) or 0.0)
+        order.status = OrderStatus.FILLED
+        self._update_order(order)
+        self._update_position_after_fill(order)
+        asyncio.ensure_future(self._query_account())
+
+    def _on_qry_account(self, p) -> None:
+        if not p:
+            return
+        self._account.cash = float(getattr(p, "Available", 0.0) or 0.0)
+        self._account.equity = float(getattr(p, "Balance", 0.0) or 0.0)
+        self._account.buying_power = float(getattr(p, "Available", 0.0) or 0.0)
+
+    def _on_qry_position(self, p) -> None:
+        if not p:
+            return
+        sym = getattr(p, "InstrumentID", None)
+        if not sym:
+            return
+        qty = float(getattr(p, "Position", 0) or 0)
+        if qty == 0:
+            self._positions.pop(sym, None)
+            return
+        self._positions[sym] = Position(
+            symbol=sym, quantity=qty,
+            avg_cost=float(getattr(p, "OpenCost", 0.0) or 0.0) / qty if qty else 0.0,
+            market_value=qty * (self._sim_prices.get(sym, 0.0)),
+            unrealized_pnl=float(getattr(p, "PositionProfit", 0.0) or 0.0))
+
+    def _on_ctp_err(self, info, rid) -> None:
+        if info and getattr(info, "ErrorID", 0) != 0:
+            logger.error("CTP 错误(%s) rid=%s: %s", getattr(info, "ErrorID", ""),
+                         rid, ctp_error(getattr(info, "ErrorID", 0)))

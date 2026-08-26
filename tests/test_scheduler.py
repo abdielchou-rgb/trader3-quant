@@ -143,3 +143,17 @@ def test_scheduler_legacy_off_by_default(tmp_path):
     cfg = SchedulerConfig(state_path=str(tmp_path / "s.json"))
     run = run_scheduler_step(panel=panel, kind="manual", config=cfg)
     assert run.legacy is None
+
+
+def test_scheduler_auto_panel(tmp_path):
+    from trader3.v2.quant_pipeline import QuantPipelineConfig
+    cfg = SchedulerConfig(state_path=str(tmp_path / "s.json"), auto_panel=True,
+                          universe=[f"A{i}" for i in range(6)], lookback_days=140)
+    qcfg = QuantPipelineConfig(method="ic_weighted", use_moe=True,
+                               moe_experts=["lgbm", "et", "ridge"], min_train=60,
+                               factor_exprs={"f1": "sub(log(vwap), log(close))",
+                                             "f2": "rank(close)"})
+    run = run_scheduler_step(kind="manual", config=cfg, quant_config=qcfg)
+    assert not run.quant["weights"].empty
+    assert run.state["run_count"] == 1
+
