@@ -140,10 +140,9 @@ class OrderManager:
         """用已成交订单反推实际权重（供回测/审计）。"""
         actual = {}
         for o in filled:
-            if getattr(o, "status", None) is None or str(o.status).endswith("filled") is False:
+            if "fill" not in str(getattr(o, "status", "")).lower():
                 # 仅统计已成交
-                if "filled" not in str(getattr(o, "status", "")).lower():
-                    continue
+                continue
             qty = getattr(o, "filled_qty", 0.0) or 0.0
             if qty <= 0:
                 continue

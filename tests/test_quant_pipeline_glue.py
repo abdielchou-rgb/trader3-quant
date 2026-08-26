@@ -7,7 +7,7 @@ import asyncio
 import numpy as np
 import pandas as pd
 
-from trader3.v2.live.broker_base import BrokerBase, OrderSide, Position
+from trader3.v2.live.broker_base import BrokerBase, OrderSide, OrderStatus, Position
 from trader3.v2.order_manager import OrderManager, OrderManagerConfig
 from trader3.v2.portfolio import PortfolioConfig, PortfolioConstruction, construct_portfolio
 from trader3.v2.quant_pipeline import QuantPipelineConfig, run_quant_pipeline

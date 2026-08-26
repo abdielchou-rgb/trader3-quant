@@ -14,7 +14,6 @@ from trader3.v2.live.broker_base import (
     Order,
     OrderSide,
     OrderStatus,
-    Position,
     ShadowBroker,
 )
 from trader3.v2.panel_builder import FIELDS, build_panel

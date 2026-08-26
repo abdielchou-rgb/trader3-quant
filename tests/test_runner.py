@@ -1,17 +1,20 @@
-"""顶层编排器/CLI 集成测试（离线：SIMULATED 券商 + 合成面板）。"""
+"""顶层编排器/CLI 集成测试（离线：SIMULATED 券商 + 合成面板；真实 Qlib 数据可选）。"""
 
 from __future__ import annotations
 
 import asyncio
+import os
 
 from trader3.v2.config import Settings
 from trader3.v2.live.broker_base import ShadowBroker
 from trader3.v2.runner import (
     build_broker,
-    build_pipeline_config,
-    build_scheduler_config,
     run_once,
     summarize,
+)
+
+QLIB_BIN = os.environ.get(
+    "QLIB_BIN", r"D:\Claude\projects\2hao-analyst\data\qlib_bin"
 )
 
 
@@ -62,3 +65,21 @@ def test_summarize_runs():
     txt = summarize(run)
     assert "量化主链路运行" in txt
     assert "嵌套执行" in txt
+
+
+def test_run_once_with_qlib_real_data():
+    if not os.path.isdir(QLIB_BIN):
+        import pytest
+
+        pytest.skip("QLIB_BIN 不存在")
+    s = _settings(
+        DATA_SOURCE="qlib", QLIB_URI=QLIB_BIN, LOOKBACK_DAYS="200",
+        NESTED_EXECUTION="true",
+        UNIVERSE="bj430017,bj430047,bj430090,bj430139,bj430198,bj430300",
+    )
+    run = asyncio.run(run_once(s, kind="manual"))
+    assert not run.quant["weights"].empty
+    assert set(run.quant["weights"].index).issubset(
+        {"bj430017", "bj430047", "bj430090", "bj430139", "bj430198", "bj430300"}
+    )
+    assert "execution_plan" in run.quant["meta"]

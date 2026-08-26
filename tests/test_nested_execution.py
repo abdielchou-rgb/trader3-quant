@@ -7,12 +7,10 @@ import asyncio
 import numpy as np
 import pandas as pd
 
-from trader3.v2.execution import LiquidityEngine
 from trader3.v2.nested_execution import (
     ExecutionPlan,
     NestedExecutor,
     NestedExecutorConfig,
-    TradeSlice,
     _almgren_chriss_rate,
     _mv_weights,
 )
@@ -87,7 +85,10 @@ def test_nested_slower_for_high_impact_asset():
 
 def test_pipeline_nested_execution_flag():
     from trader3.v2.live.broker_base import (
-        Account, BrokerBase, MarketData, Order, OrderSide, OrderStatus, Position,
+        Account,
+        BrokerBase,
+        MarketData,
+        OrderStatus,
     )
     from trader3.v2.quant_pipeline import QuantPipelineConfig, run_quant_pipeline
 

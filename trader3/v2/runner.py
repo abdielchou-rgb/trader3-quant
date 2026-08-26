@@ -21,6 +21,7 @@ import logging
 from typing import Any
 
 from trader3.v2.config import Settings
+from trader3.v2.data_sources import make_panel_source
 from trader3.v2.execution import KillSwitch
 from trader3.v2.factor_factory import FactorFactoryConfig
 from trader3.v2.live.broker_base import ShadowBroker
@@ -62,6 +63,7 @@ def build_scheduler_config(settings: Settings, universe: list[str]) -> Scheduler
         enable_factor_factory_refresh=settings.factory_refresh,
         factor_factory_every_n=settings.factory_every_n,
         legacy_daily=settings.legacy_daily,
+        panel_source=make_panel_source(settings.data_source, settings.qlib_uri),
     )
 
 

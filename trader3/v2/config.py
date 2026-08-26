@@ -38,6 +38,8 @@ class Settings:
     lookback_days: int = 250
     universe: str = ""          # 逗号分隔标的；非空则启用自主面板
     shadow_mode: bool = False   # 影子模式（真实券商仅空跑）
+    data_source: str = "synthetic"   # synthetic | qlib
+    qlib_uri: str = ""                # Qlib 二进制行情根目录
 
     @classmethod
     def load(cls, environ: dict | None = None) -> Settings:
@@ -72,6 +74,8 @@ class Settings:
             lookback_days=int(g("LOOKBACK_DAYS", str(cls.lookback_days))),
             universe=g("UNIVERSE", cls.universe),
             shadow_mode=g("SHADOW_MODE", "false").strip().lower() in ("1", "true", "yes"),
+            data_source=g("DATA_SOURCE", cls.data_source),
+            qlib_uri=g("QLIB_URI", cls.qlib_uri),
         )
 
     def ctp_config(self) -> dict:

@@ -362,8 +362,8 @@ async def run_quant_pipeline(
             internal_after: dict[str, float] = {
                 s: float(p.quantity) for s, p in positions.items()}
             for o in placed:
-                st = str(getattr(o, "status", ""))
-                if "filled" in st:
+                st = str(getattr(o, "status", "")).lower()
+                if "fill" in st:
                     q = float(getattr(o, "filled_qty", 0.0) or getattr(o, "quantity", 0.0))
                     internal_after[o.symbol] = internal_after.get(o.symbol, 0.0) + (
                         q if o.side == OrderSide.BUY else -q)
