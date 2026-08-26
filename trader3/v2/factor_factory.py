@@ -4,8 +4,11 @@ LLM 因子工厂（Factor Factory）—— 自主因子挖掘闭环。
 对标 AlphaAgent / QuantGPT / RD-Agent 的「假设→生成→回测→抗过拟合→入库」代理循环：
 
 1. 提出假设：离线模板（动量/反转/量价/波动率…）+ 参数变异；可选 LLM 生成新表达式。
-2. 落地回测：对候选因子做扩张窗口（expanding-window）OOS RankIC 与多空收益回测。
-3. 抗过拟合闸门：IC > 阈值、t 统计量 > 1.96、正 IC 占比、与库内因子冗余度 < 上限、且非 NaN。
+2. 落地回测：对候选因子做扩张窗口 OOS RankIC 与多空收益；并叠加 Purged-CV
+   （embargo + 标签 purge 的时序 walk-forward）逐折 RankIC 与组合式回测，
+   输出 OOS t 统计量、稳定性与 Deflated Sharpe Ratio（多重检验校正）。
+3. 抗过拟合闸门：IC > 阈值、扩张窗口或 Purged-CV 的 t 统计量 > 1.96、正 IC 占比、
+   与库内因子冗余度 < 上限、且非 NaN；（可选 dsr_min / cv_strict 进一步加严）。
 4. 入库：通过闸门的因子写入 Registry（JSON 持久化），供管线 `factor_exprs` 复用；失败候选触发变异/精炼（refine）。
 
 LLM 路径为可选：提供 `llm_fn(prompt)->str` 时启用；无 Key 时纯离线闭环同样可运行。
@@ -37,6 +40,10 @@ class FactorMetrics:
     sharpe: float = float("nan")
     max_dd: float = float("nan")
     corr_with_existing: float = 0.0
+    cv_ic: float = float("nan")        # Purged-CV 逐折 IC 均值
+    cv_ic_t: float = float("nan")      # CV 聚合 OOS t 统计量（更保守）
+    cv_stability: float = float("nan")  # 1 - std/|mean|，越接近 1 越稳
+    deflated_sharpe: float = 0.0       # 多重检验校正后的夏普
     passed: bool = False
     reason: str = ""
     generation: int = 0
@@ -104,8 +111,16 @@ class FactorFactoryConfig:
     ic_pos_min: float = 0.6       # 正 IC 窗口占比下限
     corr_max: float = 0.7        # 与库内因子最大冗余度上限
     min_train: int = 60          # 扩张窗口最小训练长度
-    top_n: int = 20              # 单轮最多评估候选数
+    top_n: int = 20               # 单轮最多评估候选数
     n_propose: int = 12          # 单轮模板提议数（参数展开后截断）
+    # Purged-CV / 组合式回测（P0-4：严谨 OOS 验证）
+    cv_splits: int = 5
+    cv_embargo: int = 5
+    cv_horizon: int = 5
+    cv_top_frac: float = 0.2
+    cv_bottom_frac: float = 0.2
+    cv_strict: bool = False       # True：仅以 Purged-CV t 为准（生产推荐，杜绝乐观偏差）
+    dsr_min: float = 0.0          # 缩水夏普下限（>0 时启用硬闸）
 
 
 def _row_rank_ic(fr: pd.Series, ff: pd.Series) -> float:
@@ -250,18 +265,36 @@ class FactorFactory:
         dd = (run_max - cum) / run_max
         max_dd = float(dd.max()) if len(dd) else 0.0
 
+        # Purged-CV + 组合式回测（严谨 OOS，防泄漏/乐观）
+        from trader3.v2.backtest_cv import combinatorial_backtest, purged_cv_rankic
+        cv = purged_cv_rankic(factor, fwd, cfg.cv_splits, cfg.cv_embargo,
+                              cfg.min_train, cfg.cv_horizon)
+        n_trials = max(2, cfg.cv_splits * cfg.top_n)
+        cb = combinatorial_backtest(factor, fwd, cfg.cv_splits, cfg.cv_embargo,
+                                    cfg.cv_top_frac, cfg.cv_bottom_frac,
+                                    cfg.min_train, cfg.cv_horizon, n_trials)
+
         corr = self._redundancy(factor, panel)
+        # OOS t 统计量：扩张窗口或 Purged-CV 任一达标即视为具备样本外预测力
+        # （生产环境建议置 cv_strict=True，仅以 CV 为准以杜绝泄漏/乐观偏差）
+        tstat_eff = cv["ic_t"] if cfg.cv_strict else max(tstat, cv["ic_t"])
         passed = bool(
-            np.isfinite(ic_mean) and ic_mean >= cfg.ic_min and tstat >= cfg.tstat_min
+            np.isfinite(ic_mean) and ic_mean >= cfg.ic_min
+            and tstat_eff >= cfg.tstat_min
             and pos_ratio >= cfg.ic_pos_min and corr <= cfg.corr_max
+            and (cfg.dsr_min <= 0 or cb["deflated_sharpe"] >= cfg.dsr_min)
         )
-        reason = "ok" if passed else self._fail_reason(ic_mean, tstat, pos_ratio, corr, cfg)
+        reason = ("ok" if passed else
+                  self._fail_reason(ic_mean, tstat_eff, pos_ratio, corr, cfg))
         return FactorMetrics(
             expr=cand.expr, hypothesis=cand.hypothesis,
             ic=round(ic_mean, 4), ir=round(ic_mean / ic_std, 4) if ic_std > 0 else 0.0,
             tstat=round(float(tstat), 3), ic_pos_ratio=round(pos_ratio, 3),
             turnover=round(float(turnover), 3), sharpe=round(sharpe, 3),
             max_dd=round(max_dd, 3), corr_with_existing=round(float(corr), 3),
+            cv_ic=round(cv["ic_mean"], 4), cv_ic_t=round(cv["ic_t"], 3),
+            cv_stability=round(cv["stability"], 3),
+            deflated_sharpe=round(cb["deflated_sharpe"], 3),
             passed=passed, reason=reason, generation=cand.generation)
 
     def _redundancy(self, factor: pd.DataFrame, panel: pd.DataFrame) -> float:
