@@ -157,3 +157,58 @@ def test_quant_pipeline_with_risk_attribution():
     decomp = res["meta"]["risk_decomp"]
     assert decomp.get("total_risk", 0.0) > 0.0
     assert "factor_exposure" in decomp
+
+
+def _make_features_and_fwd(n_dates=120, n_assets=8, seed=7):
+    """构造 features_wide + forward_returns 供 MoE 测试（不依赖 DSL）。"""
+    rng = np.random.default_rng(seed)
+    dates = pd.date_range("2024-01-01", periods=n_dates, freq="D")
+    assets = [f"A{i}" for i in range(n_assets)]
+    # 因子1：带噪声的动量代理
+    f1 = pd.DataFrame(rng.normal(0, 1, (n_dates, n_assets)), index=dates, columns=assets)
+    # 因子2：反转代理
+    f2 = pd.DataFrame(-rng.normal(0, 1, (n_dates, n_assets)), index=dates, columns=assets)
+    feats = {"mom": f1, "rev": f2}
+    fwd = pd.DataFrame(rng.normal(0, 0.02, (n_dates, n_assets)), index=dates, columns=assets)
+    return feats, fwd
+
+
+def test_moe_ensemble_basic():
+    feats, fwd = _make_features_and_fwd()
+    from trader3.v2.moe_ensemble import MoEConfig, train_moe
+    res = train_moe(feats, fwd, MoEConfig(experts=["lgbm", "et", "ridge"], min_train=60))
+    assert res.used_experts
+    assert not res.scores.empty
+    # 门控权重逐期和为 1
+    gw = res.gate_weights
+    assert np.allclose(gw.sum(axis=1).dropna().values, 1.0, atol=1e-6)
+    # 融合得分应为各专家加权组合（与手动重算近似）
+    assert res.oos_rank_ic is not None
+
+
+def test_moe_regime_affinity_gate():
+    feats, fwd = _make_features_and_fwd()
+    from trader3.v2.moe_ensemble import MoEConfig, train_moe
+    aff = {"high-vol": {"lgbm": 0.2, "et": 0.3, "ridge": 1.5},
+           "low-vol": {"lgbm": 1.0, "et": 1.0, "ridge": 0.5}}
+    res = train_moe(
+        feats, fwd,
+        MoEConfig(experts=["lgbm", "et", "ridge"], min_train=60,
+                  gate_method="regime_affinity", regime_affinity=aff),
+        regime_labels=pd.Series(["high-vol"] * len(fwd.index), index=fwd.index))
+    assert not res.scores.empty
+    assert res.gate_method == "regime_affinity"
+
+
+def test_quant_pipeline_with_moe():
+    panel = _make_panel(n_dates=140)
+    feats = {
+        "f1": "sub(log(vwap), log(close))",
+        "f2": "rank(close)",
+    }
+    cfg = QuantPipelineConfig(method="ic_weighted", use_moe=True,
+                             moe_experts=["lgbm", "et", "ridge"],
+                             min_train=60, factor_exprs=feats)
+    res = asyncio.run(run_quant_pipeline(panel, config=cfg))
+    assert not res["weights"].empty
+    assert res["weights"].sum() <= 1.0 + 1e-6

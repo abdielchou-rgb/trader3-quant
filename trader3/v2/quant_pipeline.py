@@ -41,6 +41,8 @@ class QuantPipelineConfig:
     use_regime: bool = False               # 用 HMM 检测状态并路由方法 + 缩放敞口
     risk_model_cov: bool = False           # 用面板收益估计资产协方差喂给 MV/RB
     risk_attribution: bool = False         # 用 Barra 风格风险模型对最终权重做分解
+    use_moe: bool = False                  # 多专家集成（门控融合）替代单一 ensemble
+    moe_experts: list[str] | None = None   # 专家模型列表（None 用默认）
     ewma_cov_lambda: float = 0.94          # 协方差 EWMA 衰减
 
 
@@ -278,6 +280,16 @@ def _run_ensemble(panel, factor_exprs, forward_returns, cfg) -> pd.Series | pd.D
 
     fwd = forward_returns if forward_returns is not None else _default_forward(panel)
     try:
+        if cfg.use_moe:
+            from trader3.v2.moe_ensemble import MoEConfig, train_moe
+            moe_cfg = MoEConfig(
+                experts=cfg.moe_experts or ["lgbm", "et", "ridge"],
+                min_train=cfg.min_train,
+            )
+            moe_res = train_moe(features_wide, fwd, moe_cfg)
+            logger.info("[quant_pipeline] MoE 融合完成，专家=%s OOS_IC=%.4f",
+                        moe_res.used_experts, moe_res.oos_rank_ic)
+            return moe_res.scores
         res = build_ensemble(
             features_wide, fwd,
             config=EnsembleConfig(model=cfg.ensemble_model, min_train=cfg.min_train),
