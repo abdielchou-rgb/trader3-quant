@@ -46,6 +46,8 @@ OPS: dict[str, tuple[int, Callable]] = {
     "ts_max": (2, lambda a, w: _ts_max(a, int(w))),
     "ts_min": (2, lambda a, w: _ts_min(a, int(w))),
     "ts_corr": (3, lambda a, b, w: _ts_corr(a, b, int(w))),
+    "min": (2, lambda a, b: np.minimum(a, b)),
+    "max": (2, lambda a, b: np.maximum(a, b)),
 }
 
 # 叶子节点: 价格/成交量字段

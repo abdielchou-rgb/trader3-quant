@@ -1,0 +1,43 @@
+{
+ "label": "csi300-2022-2023",
+ "n_candidates": 48,
+ "pool_A_single_greedy": {
+  "exprs": [
+   "sub(delay(close, 1), close)",
+   "sub(delay(close, 5), close)",
+   "sub(delay(close, 10), close)",
+   "mul(sub(close, delay(close, 10)), sub(delay(volume, 10), volume))",
+   "sub(delay(close, 20), close)",
+   "sub(amount, delay(amount, 5))"
+  ],
+  "oos_ic": 0.0175
+ },
+ "pool_B_gain_greedy": {
+  "exprs": [
+   "sub(delay(close, 1), close)",
+   "sub(close, delay(close, 250))",
+   "sub(delay(close, 10), close)",
+   "sub(amount, delay(amount, 5))",
+   "div(amount, delay(amount, 20))",
+   "mul(sub(close, delay(close, 10)), sub(delay(volume, 10), volume))",
+   "sub(delay(close, 60), delay(close, 60))"
+  ],
+  "oos_ic": 0.0117
+ },
+ "best_single_factor": {
+  "expr": "sub(delay(close, 20), close)",
+  "oos_ic": 0.0242
+ },
+ "verdict": "A不劣于B（本面板未体现协同增益）",
+ "timing_s": {
+  "A": 0.0,
+  "B": 12.8
+ },
+ "gate_failure_dist": {
+  "IC": 35,
+  "有效窗口过少": 7,
+  "t": 2,
+  "正IC占比": 4
+ },
+ "synthetic_quick_note": "合成冒烟（300天×30资产，隐藏动量+反转信号）：B(池增益贪心 OOS IC 0.7525) > A(单因子贪心 0.5148)——池化奖励在信号可分解面板上成立；真实 csi300 面板 B(0.0117) vs A(0.0175)：真实数据上两池都未跑赢最优单因子(0.0242)，与基线卡 v2 'TopK 等权合成未跑赢最优单因子' 的既有实证一致——真实差距不在选池策略而在候选池信号质量"
+}

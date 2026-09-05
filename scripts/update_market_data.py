@@ -518,6 +518,33 @@ def refresh_membership(dp, universe: str = "csi300", cal_last: str = "") -> dict
 
 # ── 主流程 ──────────────────────────────────────────────
 
+def post_qc_guard(data_dir: str, universe: str = "csi300",
+                  tolerance_critical: int = 2) -> dict:
+    """
+    更新收尾 QC 护栏：任何 --apply 写入后跑一次 QC，确认没有把数据写坏。
+
+    事故史（2026-08/09）：update --stocks 曾静默截断 21 只老股、追加段前复权基准
+    断裂造成 50%~2000% 假跳。容忍基线：critical ≤ 2（两只已知单只历史/次新孤例），
+    stock_contract == 0（任何契约失败都说明本次更新写坏了对齐）。
+    返回 report 摘要 dict（供调用方打印/告警）。
+    """
+    from trader3.v2 import data_qc
+
+    report = data_qc.run_qc(data_dir=data_dir, sample_limit=200, universe=universe)
+    data_qc.save_report(report)
+    line = data_qc.qc_summary_line(report)
+    critical = int(report.get("critical", -1))
+    contracts = sum(1 for o in report.get("offenders", [])
+                    if o.get("check") == "stock_contract")
+    return {
+        "line": line,
+        "critical": critical,
+        "stock_contract": contracts,
+        "ok": critical <= tolerance_critical and contracts == 0,
+        "warnings": int(report.get("warnings", 0)),
+    }
+
+
 def main():
     ap = argparse.ArgumentParser(description="qlib_bin 增量更新管线")
     ap.add_argument("--apply", action="store_true", help="真正写入（默认 dry-run）")
@@ -614,6 +641,18 @@ def main():
             print(f"[6/6] ⚠ data_version 写入失败: {e}")
     else:
         print("[6/6] 跳过 data_version")
+
+    # ── 收尾 QC 护栏（7/6）────────────────────────────────
+    # 数据纪律：任何 --apply 写入后必须跑一次 QC，确认没有把数据写坏。
+    try:
+        guard = post_qc_guard(dp.data_dir, universe=args.membership_universe)
+        print(f"[7/6] QC 护栏: {guard['line']}")
+        print(f"      critical={guard['critical']} stock_contract={guard['stock_contract']}")
+        if not guard["ok"]:
+            print("      ⚠ QC 超容忍基线（critical>2 或 contract>0）——"
+                  "本次更新可能引入了数据损坏，建议人工检查备份目录并回滚。")
+    except Exception as qc_exc:
+        print(f"[7/6] ⚠ QC 护栏执行失败: {qc_exc}")
 
     print("✅ 完成。备份保留于:", backup_root)
     return 0
