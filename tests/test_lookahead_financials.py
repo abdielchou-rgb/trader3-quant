@@ -13,7 +13,25 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import pytest
 
+from trader3.financials_provider import FinancialsProvider  # noqa: E402
+
 CODE = "600519"
+
+
+def _financials_available() -> bool:
+    try:
+        FinancialsProvider()
+        return True
+    except FileNotFoundError:
+        return False
+
+
+# 防前视验证依赖真实 financials.db（本机 2hao-analyst 数据）；
+# 外部环境无该库时整模块跳过（数据文件不入库）。
+pytestmark = pytest.mark.skipif(
+    not _financials_available(),
+    reason="financials.db 不可用（设 T3_FINANCIALS_DB 指向本地数据库）",
+)
 
 
 @pytest.fixture(scope="module")
