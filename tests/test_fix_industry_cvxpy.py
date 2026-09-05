@@ -112,6 +112,7 @@ def _make_fake_cvxpy(n_assets: int = 8):
 # ═══════════════════════════════════════════
 
 def test_fetch_parses_columns(monkeypatch):
+    pytest.importorskip("akshare", reason="akshare 未安装（行业接口测试需要）")
     boards = pd.DataFrame(
         {"板块名称": ["半导体", "白酒"], "板块代码": ["BK1036", "BK0477"]}
     )
