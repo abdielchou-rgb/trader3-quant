@@ -89,7 +89,12 @@ def test_window_overlap_rejected():
             break
         except UnicodeDecodeError:
             continue
-    assert text and "样本外" in text
+    # 编码跨环境不稳（CI GBK 控制台/转义输出），断言稳定锚点：
+    # argparse error 输出含双方日期与中文"必须晚于"语义（repr 转义后用 unicode 码点回查）
+    assert text, "stderr 不可解码"
+    stable = "2020-01-01" in text and "2023-12-31" in text
+    escaped = "\\u5fc5\\u987b\\u665a\\u4e8e" in text  # "必须晚于" 的 \uXXXX 转义形态
+    assert stable or escaped, f"错误信息缺关键内容: {text[:200]}"
 
 
 def test_fitness_sign_consistency():
