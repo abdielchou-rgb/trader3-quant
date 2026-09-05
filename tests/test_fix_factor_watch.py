@@ -70,7 +70,12 @@ def test_append_history_and_recent_mean(tmp_path):
 
 def test_real_expr_default_builder_smoke():
     """默认 qlib 构建器冒烟（真实数据，小窗口）。"""
-    if not Path(r"D:\Claude\projects\2hao-analyst\data\qlib_bin").exists():
+    import os
+    qlib_bin = os.environ.get(
+        "QLIB_BIN",
+        str(Path(__file__).resolve().parent.parent.parent / "2hao-analyst" / "data" / "qlib_bin"),
+    )
+    if not Path(qlib_bin).exists():
         import pytest
         pytest.skip("无本地 qlib 数据")
     res = fw.compute_ic_series(lookback_days=140, n_stocks=20)

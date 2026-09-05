@@ -172,11 +172,16 @@ class SentimentStore:
             return json.load(f).get("scores", {})
 
     def window_frame(self, days: int = 20) -> pd.DataFrame:
-        """最近 N 天 {date × code} 宽表，缺失 NaN。"""
+        """最近 N 天 {date × code} 宽表，缺失 NaN。
+
+        日期窗口按"自然日"滚动计算。为避免午夜/时区边界把今天排除在窗口外，
+        窗口以 [今天-(days-1), 今天] 的日期串集合（UTC 之外用本地自然日）为准。
+        """
+        today = datetime.now().date()
+        window_dates = {(today - timedelta(days=i)).strftime("%Y%m%d")
+                        for i in range(days)}
         frames = []
-        for i in range(days):
-            dt = datetime.now() - timedelta(days=i)
-            d = dt.strftime("%Y%m%d")
+        for d in sorted(window_dates):
             s = self.read(d)
             if s:
                 frames.append(pd.Series(s, name=d))

@@ -224,6 +224,77 @@ class TestPaperTradeRecordWritten:
         assert second["cash"] < first["cash"], "同日第二单应继续扣减现金"
 
 
+# ── (7) P2-6 多空辩论复核接线 ────────────────────────────
+
+class TestDebateReviewWiring:
+    """run_daily(debate_review=True) 的行为：veto 剔除、失败放行、默认关"""
+
+    def _run(self, offline_pipeline, debate_llm_fn=None):
+        dp_mod, paper_dir, tmp = offline_pipeline
+        return dp_mod.run_daily(
+            codes=["600519"], paper_trading=True,
+            debate_review=True, debate_llm_fn=debate_llm_fn)
+
+    def test_debate_veto_blocks_signal(self, offline_pipeline):
+        """辩论裁决 veto → 信号退出 triggered + caveat 记录 + 不再纸面下单"""
+        dp_mod, paper_dir, tmp = offline_pipeline
+
+        def veto_llm(prompt):
+            if "多头研究员" in prompt:
+                return '{"claim":"多","evidence":["e"],"conviction":0.4}'
+            if "空头研究员" in prompt:
+                return '{"claim":"空","evidence":["e"],"conviction":0.8}'
+            return '{"verdict":"veto","confidence":0.8,"lesson":"估值存疑"}'
+
+        summary = self._run(offline_pipeline, debate_llm_fn=veto_llm)
+        assert summary["debate"]["600519"]["verdict"] == "veto"
+        # 触发信号被辩论否决
+        assert summary["triggered"] == []
+        # caveat 已写入
+        assert any("辩论否决" in c for c in summary["all_results"][0].caveats)
+        # 纸面账户无新成交（被否决的信号未下单）
+        with open(os.path.join(paper_dir, "account.json"), encoding="utf-8") as f:
+            acct = json.load(f)
+        assert acct["trades_today"] == []
+
+    def test_debate_confirm_keeps_signal(self, offline_pipeline):
+        dp_mod, paper_dir, tmp = offline_pipeline
+
+        def confirm_llm(prompt):
+            if "多头研究员" in prompt:
+                return '{"claim":"多","evidence":["e1","e2"],"conviction":0.85}'
+            if "空头研究员" in prompt:
+                return '{"claim":"空","evidence":["e1"],"conviction":0.3}'
+            return '{"verdict":"confirm","confidence":0.8,"lesson":"信号扎实"}'
+
+        summary = self._run(offline_pipeline, debate_llm_fn=confirm_llm)
+        assert summary["debate"]["600519"]["verdict"] == "confirm"
+        assert len(summary["triggered"]) == 1  # 信号保留
+        with open(os.path.join(paper_dir, "account.json"), encoding="utf-8") as f:
+            acct = json.load(f)
+        assert acct["trades_today"], "confirm 后应正常纸面下单"
+
+    def test_debate_failure_falls_back_to_rule(self, offline_pipeline):
+        """辩论 LLM 异常 → 降级规则辩论，信号照常复核（不阻断主链路）"""
+        dp_mod, paper_dir, tmp = offline_pipeline
+
+        def boom_llm(prompt):
+            raise RuntimeError("llm down")
+
+        summary = self._run(offline_pipeline, debate_llm_fn=boom_llm)
+        # LLM 失败 → 规则辩论兜底（该 stub 场景为强信号 → confirm）
+        assert summary["debate"]["600519"]["verdict"] == "confirm"
+        assert summary["debate"]["600519"]["llm_used"] is False  # 规则版
+        assert len(summary["triggered"]) == 1  # 主链路未阻断
+
+    def test_debate_off_by_default(self, offline_pipeline):
+        """不开 debate_review：行为与升级前完全一致（无 debate 字段）"""
+        dp_mod, paper_dir, tmp = offline_pipeline
+        summary = dp_mod.run_daily(codes=["600519"], paper_trading=True)
+        assert "debate" not in summary
+        assert len(summary["triggered"]) == 1
+
+
 # ── (4) extra_sources 注册进 sync_all ─────────────────────
 
 _EXTRA_NAMES = ("margin", "shareholder_count", "northbound")

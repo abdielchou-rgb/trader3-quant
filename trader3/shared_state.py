@@ -8,11 +8,26 @@
 from __future__ import annotations
 
 import json
-import msvcrt
 import os
+
+# 跨平台锁：Windows 用 msvcrt 字节锁；POSIX 用 fcntl。本机(Windows)行为不变。
+import sys
 import tempfile
 import time
 from datetime import datetime, timedelta
+
+if sys.platform == "win32":
+    import msvcrt
+    _HAVE_LOCK = True
+elif sys.platform == "darwin":
+    import fcntl
+    _HAVE_LOCK = True
+else:
+    try:
+        import fcntl  # type: ignore
+        _HAVE_LOCK = True
+    except ImportError:
+        _HAVE_LOCK = False
 
 # 默认共享状态目录
 _DEFAULT_STATE_DIR = os.path.abspath(
@@ -35,15 +50,20 @@ def _atomic_write_bytes(path: str, data: bytes) -> None:
 
 
 def _locked(path: str, mode: str):
-    """跨进程独占锁上下文（Windows msvcrt），防止读-改-写互相覆盖。"""
+    """跨进程独占锁上下文（Windows msvcrt / POSIX fcntl），防止读-改-写互相覆盖。"""
     lock_path = path + ".lock"
     os.makedirs(os.path.dirname(lock_path), exist_ok=True)
     f = open(lock_path, "a+b")
 
     def _acquire():
+        if not _HAVE_LOCK:
+            return True  # 无锁原语平台（如某些沙箱）：退化为无锁，保证可用性
         for _ in range(200):  # 最多等 ~10s
             try:
-                msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)
+                if sys.platform == "win32":
+                    msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)
+                else:
+                    fcntl.flock(f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
                 return True
             except OSError:
                 time.sleep(0.05)
@@ -58,7 +78,10 @@ def _locked(path: str, mode: str):
             if self.ok:
                 try:
                     f.seek(0)
-                    msvcrt.locking(f.fileno(), msvcrt.LK_UNLCK, 1)
+                    if sys.platform == "win32":
+                        msvcrt.locking(f.fileno(), msvcrt.LK_UNLCK, 1)
+                    else:
+                        fcntl.flock(f.fileno(), fcntl.LOCK_UN)
                 except OSError:
                     pass
             f.close()

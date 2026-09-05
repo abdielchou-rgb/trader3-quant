@@ -4,12 +4,13 @@
 import json
 import sys
 import time
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import pytest
 
-sys.path.insert(0, r"D:\Claude\projects\3号交易员")
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from trader3.v2.llm_sentiment import LLMScorer
 from trader3.v2.retrain_loop import (

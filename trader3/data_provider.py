@@ -52,17 +52,20 @@ def _read_bin_cached(path: str) -> bytes:
     return _BIN_CACHE[key]
 
 # ── 可配置数据目录 ──
+# 默认相对兄弟目录 2hao-analyst/data/qlib_bin（本机原始布局）；
+# 外部用户请设 T3_QLIB_DATA_DIR（或 QLIB_BIN）指向自己的 Qlib bin 数据根。
 DEFAULT_QLIB_DATA_DIR = os.environ.get(
     "T3_QLIB_DATA_DIR",
-    os.path.abspath(
-        os.path.join(os.path.dirname(__file__), "..", "..", "2hao-analyst", "data", "qlib_bin")
+    os.environ.get(
+        "QLIB_BIN",
+        os.path.abspath(
+            os.path.join(os.path.dirname(__file__), "..", "..", "2hao-analyst", "data", "qlib_bin")
+        ),
     ),
 )
 
-# 若在 VM/沙箱中，回退到已挂载路径
-_ALT_DIRS = [
-    "/sessions/focused-great-pasteur/mnt/2hao-analyst/data/qlib_bin",
-]
+# 备选数据目录（自定义挂载点等），按存在性探测
+_ALT_DIRS: list[str] = []
 
 
 class QlibDataProvider:
@@ -341,11 +344,7 @@ class QlibDataProvider:
 
 def find_qlib_dir() -> str | None:
     """探测可用的 qlib 数据目录"""
-    for candidate in [
-        DEFAULT_QLIB_DATA_DIR,
-        *_ALT_DIRS,
-        "/sessions/focused-great-pasteur/mnt/2hao-analyst/data/qlib_bin",
-    ]:
+    for candidate in [DEFAULT_QLIB_DATA_DIR, *_ALT_DIRS]:
         if candidate and os.path.isdir(os.path.join(candidate, "calendars")):
             return candidate
     return None

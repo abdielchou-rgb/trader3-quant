@@ -6,14 +6,16 @@ kill_criteria 模块测试
 import json
 import os
 import sys
+from pathlib import Path
 
 import numpy as np
 import pytest
 
-sys.path.insert(0, r"D:\Claude\projects\3号交易员")
-sys.path.insert(0, r"D:\Claude\projects\3号交易员\tests")
+_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(_ROOT))
+sys.path.insert(0, str(_ROOT / "tests"))
 
-from trader3.v2.kill_criteria import (
+from trader3.v2.kill_criteria import (  # noqa: E402
     auto_veto_factor,
     evaluate_kill_criteria,
     run_kill_check,

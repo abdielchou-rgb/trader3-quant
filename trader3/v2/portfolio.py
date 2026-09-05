@@ -42,6 +42,9 @@ class PortfolioConfig:
     max_single: float = 0.25          # 单票上限（mean_variance/risk_budget 生效）
     industry_neutral: bool = False
     gross_cap: float = 1.0            # 目标总敞口上限（与 overlay.size_multiplier 取小）
+    beta_neutral: bool = False         # β 中性（需 exposures 含 beta 列）
+    industry_max_weight: float = 1.0   # 单行业合计权重上限（<1 时启用，需 industries）
+    tracking_error_max: float = 0.0    # 年化跟踪误差上限（>0 时启用，需 cov + benchmark）
     lot_sizes: dict[str, int] | None = None  # 仅用于下单阶段，这里仅透传
 
 
@@ -73,6 +76,8 @@ class PortfolioConstruction:
         industries: dict[str, str] | None = None,
         regime_probs: dict[str, float] | None = None,
         regime_weights: dict[str, dict] | None = None,
+        exposures: pd.DataFrame | None = None,
+        benchmark: pd.Series | None = None,
     ) -> pd.Series:
         """
         返回目标权重 pd.Series（index=asset，和为 gross_cap×size_multiplier ≤ 1）。
@@ -118,6 +123,18 @@ class PortfolioConstruction:
         if total <= 0:
             return pd.Series(dtype=float)
         w = w / total
+
+        # 风险约束：β 中性 / 行业上限 / 跟踪误差上限
+        if cfg.beta_neutral or (cfg.industry_max_weight < 1.0) or cfg.tracking_error_max > 0:
+            from trader3.v2.risk_model import apply_risk_constraints
+
+            cov_df = cov if isinstance(cov, pd.DataFrame) else None
+            w = apply_risk_constraints(
+                w, exposures=exposures, cov=cov_df, industries=industries,
+                beta_neutral=cfg.beta_neutral,
+                industry_max_weight=cfg.industry_max_weight,
+                tracking_error_max=cfg.tracking_error_max, benchmark=benchmark,
+            )
 
         # 总敞口上限：gross_cap 与 overlay.size_multiplier 取小
         gross = cfg.gross_cap
@@ -224,6 +241,7 @@ def construct_portfolio(
     *,
     cov=None, returns=None, overlay=None,
     industries=None, regime_probs=None, regime_weights=None,
+    exposures=None, benchmark=None,
     config: PortfolioConfig | None = None,
 ) -> pd.Series:
     """便捷函数：construct_portfolio(scores, method=...)(panel) -> weights"""
@@ -232,5 +250,5 @@ def construct_portfolio(
     return PortfolioConstruction(cfg).construct(
         scores, cov=cov, returns=returns, overlay=overlay,
         industries=industries, regime_probs=regime_probs,
-        regime_weights=regime_weights,
+        regime_weights=regime_weights, exposures=exposures, benchmark=benchmark,
     )

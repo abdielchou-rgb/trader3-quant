@@ -34,7 +34,9 @@ try:
     import torch
     import torch.nn as nn
     _TORCH = True
-except ImportError:
+except Exception:  # ImportError 及更多：无 GPU 环境/损坏安装均视为无 torch
+    torch = None  # type: ignore
+    nn = None  # type: ignore
     _TORCH = False
 
 from sklearn.base import BaseEstimator, RegressorMixin
@@ -43,145 +45,147 @@ from sklearn.linear_model import Ridge
 from sklearn.utils.validation import check_array, check_X_y
 
 # ── PyTorch 深度学习模型 ──────────────────────────────
+# 仅当 torch 可用时才定义 nn 子类；无 torch 环境（沙箱/最小安装）不裸奔。
+if _TORCH:
 
-class _LSTMRegressor(nn.Module):
-    """LSTM 回归器，输入 (batch, seq_len, features)，输出标量。"""
-    def __init__(self, n_features: int, hidden: int = 64, layers: int = 2, dropout: float = 0.1):
-        super().__init__()
-        self.lstm = nn.LSTM(n_features, hidden, layers, batch_first=True, dropout=dropout if layers > 1 else 0)
-        self.fc = nn.Linear(hidden, 1)
+    class _LSTMRegressor(nn.Module):
+        """LSTM 回归器，输入 (batch, seq_len, features)，输出标量。"""
+        def __init__(self, n_features: int, hidden: int = 64, layers: int = 2, dropout: float = 0.1):
+            super().__init__()
+            self.lstm = nn.LSTM(n_features, hidden, layers, batch_first=True, dropout=dropout if layers > 1 else 0)
+            self.fc = nn.Linear(hidden, 1)
 
-    def forward(self, x):
-        out, _ = self.lstm(x)
-        return self.fc(out[:, -1, :]).squeeze(-1)
-
-
-class _TransformerRegressor(nn.Module):
-    """Transformer 回归器，带可学习位置编码。"""
-    def __init__(self, n_features: int, d_model: int = 64, nhead: int = 4,
-                 layers: int = 2, dropout: float = 0.1):
-        super().__init__()
-        self.input_proj = nn.Linear(n_features, d_model)
-        self.pos_embed = nn.Parameter(torch.randn(1, 100, d_model) * 0.02)  # max_len=100
-        encoder_layer = nn.TransformerEncoderLayer(d_model, nhead, dropout=dropout, batch_first=True)
-        self.encoder = nn.TransformerEncoder(encoder_layer, layers)
-        self.fc = nn.Linear(d_model, 1)
-
-    def forward(self, x):
-        seq_len = x.size(1)
-        x = self.input_proj(x) + self.pos_embed[:, :seq_len, :]
-        out = self.encoder(x)
-        return self.fc(out[:, -1, :]).squeeze(-1)
+        def forward(self, x):
+            out, _ = self.lstm(x)
+            return self.fc(out[:, -1, :]).squeeze(-1)
 
 
-class _TorchRegressorWrapper(BaseEstimator, RegressorMixin):
-    """把 PyTorch 模型包装为 sklearn 兼容估计器。"""
-    def __init__(self, model_type: str = "lstm", seq_len: int = 20,
-                 hidden: int = 64, layers: int = 2, dropout: float = 0.1,
-                 lr: float = 1e-3, epochs: int = 50, batch_size: int = 256,
-                 device: str = "cpu", random_state: int = 42, **kwargs):
-        self.model_type = model_type
-        self.seq_len = seq_len
-        self.hidden = hidden
-        self.layers = layers
-        self.dropout = dropout
-        self.lr = lr
-        self.epochs = epochs
-        self.batch_size = batch_size
-        self.device = device
-        self.random_state = random_state
-        self._model = None
-        self._n_features = None
+    class _TransformerRegressor(nn.Module):
+        """Transformer 回归器，带可学习位置编码。"""
+        def __init__(self, n_features: int, d_model: int = 64, nhead: int = 4,
+                     layers: int = 2, dropout: float = 0.1):
+            super().__init__()
+            self.input_proj = nn.Linear(n_features, d_model)
+            self.pos_embed = nn.Parameter(torch.randn(1, 100, d_model) * 0.02)  # max_len=100
+            encoder_layer = nn.TransformerEncoderLayer(d_model, nhead, dropout=dropout, batch_first=True)
+            self.encoder = nn.TransformerEncoder(encoder_layer, layers)
+            self.fc = nn.Linear(d_model, 1)
 
-    def _build_model(self, n_features: int):
-        if self.model_type == "lstm":
-            return _LSTMRegressor(n_features, self.hidden, self.layers, self.dropout)
-        elif self.model_type == "transformer":
-            return _TransformerRegressor(n_features, self.hidden, max(1, self.hidden // 16),
-                                         self.layers, self.dropout)
-        raise ValueError(f"未知模型类型: {self.model_type}")
+        def forward(self, x):
+            seq_len = x.size(1)
+            x = self.input_proj(x) + self.pos_embed[:, :seq_len, :]
+            out = self.encoder(x)
+            return self.fc(out[:, -1, :]).squeeze(-1)
 
-    def fit(self, X, y):
-        import torch.optim as optim
-        torch.manual_seed(42)
-        X, y = check_X_y(X, y, multi_output=False)
-        n_samples, n_features = X.shape
-        self._n_features = n_features
 
-        # 重塑为 (n_samples // seq_len, seq_len, n_features)
-        # 简单策略：每 seq_len 行构成一个序列，不足丢弃
-        seq_len = min(self.seq_len, n_samples)
-        n_seqs = n_samples // seq_len
-        if n_seqs < 2:
-            # 样本太少，退化为线性
-            from sklearn.linear_model import Ridge
-            self._model = Ridge(alpha=1.0)
-            self._model.fit(X, y)
+    class _TorchRegressorWrapper(BaseEstimator, RegressorMixin):
+        """把 PyTorch 模型包装为 sklearn 兼容估计器。"""
+        def __init__(self, model_type: str = "lstm", seq_len: int = 20,
+                     hidden: int = 64, layers: int = 2, dropout: float = 0.1,
+                     lr: float = 1e-3, epochs: int = 50, batch_size: int = 256,
+                     device: str = "cpu", random_state: int = 42, **kwargs):
+            self.model_type = model_type
+            self.seq_len = seq_len
+            self.hidden = hidden
+            self.layers = layers
+            self.dropout = dropout
+            self.lr = lr
+            self.epochs = epochs
+            self.batch_size = batch_size
+            self.device = device
+            self.random_state = random_state
+            self._model = None
+            self._n_features = None
+
+        def _build_model(self, n_features: int):
+            if self.model_type == "lstm":
+                return _LSTMRegressor(n_features, self.hidden, self.layers, self.dropout)
+            elif self.model_type == "transformer":
+                return _TransformerRegressor(n_features, self.hidden, max(1, self.hidden // 16),
+                                             self.layers, self.dropout)
+            raise ValueError(f"未知模型类型: {self.model_type}")
+
+        def fit(self, X, y):
+            import torch.optim as optim
+            torch.manual_seed(42)
+            X, y = check_X_y(X, y, multi_output=False)
+            n_samples, n_features = X.shape
+            self._n_features = n_features
+
+            # 重塑为 (n_samples // seq_len, seq_len, n_features)
+            # 简单策略：每 seq_len 行构成一个序列，不足丢弃
+            seq_len = min(self.seq_len, n_samples)
+            n_seqs = n_samples // seq_len
+            if n_seqs < 2:
+                # 样本太少，退化为线性
+                from sklearn.linear_model import Ridge
+                self._model = Ridge(alpha=1.0)
+                self._model.fit(X, y)
+                return self
+
+            X_seq = X[:n_seqs * seq_len].reshape(n_seqs, seq_len, n_features)
+            y_seq = y[:n_seqs * seq_len:seq_len]  # 每个序列取最后一个目标
+
+            # 转 tensor
+            X_t = torch.tensor(X_seq, dtype=torch.float32).to(self.device)
+            y_t = torch.tensor(y_seq, dtype=torch.float32).to(self.device)
+
+            self._model = self._build_model(n_features).to(self.device)
+            opt = optim.Adam(self._model.parameters(), lr=self.lr)
+            loss_fn = nn.MSELoss()
+
+            self._model.train()
+            dataset = torch.utils.data.TensorDataset(X_t, y_t)
+            loader = torch.utils.data.DataLoader(dataset, batch_size=self.batch_size, shuffle=True)
+
+            for _ in range(self.epochs):
+                for xb, yb in loader:
+                    opt.zero_grad()
+                    pred = self._model(xb)
+                    loss = loss_fn(pred, yb)
+                    loss.backward()
+                    opt.step()
+
             return self
 
-        X_seq = X[:n_seqs * seq_len].reshape(n_seqs, seq_len, n_features)
-        y_seq = y[:n_seqs * seq_len:seq_len]  # 每个序列取最后一个目标
+        def predict(self, X):
+            if not hasattr(self, "_model") or self._model is None:
+                raise RuntimeError("模型未训练")
+            X = check_array(X)
+            n_samples = X.shape[0]
 
-        # 转 tensor
-        X_t = torch.tensor(X_seq, dtype=torch.float32).to(self.device)
-        y_t = torch.tensor(y_seq, dtype=torch.float32).to(self.device)
+            # 如果是 sklearn 模型（退化情况）
+            if not isinstance(self._model, nn.Module):
+                return self._model.predict(X)
 
-        self._model = self._build_model(n_features).to(self.device)
-        opt = optim.Adam(self._model.parameters(), lr=self.lr)
-        loss_fn = nn.MSELoss()
+            seq_len = min(self.seq_len, n_samples)
+            # 取最后 seq_len 行组成一个序列预测
+            if n_samples < seq_len:
+                # pad
+                pad = np.zeros((seq_len - n_samples, X.shape[1]), dtype=np.float32)
+                X = np.vstack([pad, X])
+                n_samples = seq_len
 
-        self._model.train()
-        dataset = torch.utils.data.TensorDataset(X_t, y_t)
-        loader = torch.utils.data.DataLoader(dataset, batch_size=self.batch_size, shuffle=True)
+            X_seq = X[-seq_len:].reshape(1, seq_len, -1)
+            X_t = torch.tensor(X_seq, dtype=torch.float32).to(self.device)
+            self._model.eval()
+            with torch.no_grad():
+                pred = self._model(X_t).cpu().numpy()
+            return np.full(X.shape[0], pred.item())  # 广播到所有行（简化版）
 
-        for _ in range(self.epochs):
-            for xb, yb in loader:
-                opt.zero_grad()
-                pred = self._model(xb)
-                loss = loss_fn(pred, yb)
-                loss.backward()
-                opt.step()
+        def get_params(self, deep=True):
+            return {
+                "model_type": self.model_type, "seq_len": self.seq_len,
+                "hidden": self.hidden, "layers": self.layers,
+                "dropout": self.dropout, "lr": self.lr,
+                "epochs": self.epochs, "batch_size": self.batch_size,
+                "device": self.device, "random_state": self.random_state,
+            }
 
-        return self
-
-    def predict(self, X):
-        if not hasattr(self, "_model") or self._model is None:
-            raise RuntimeError("模型未训练")
-        X = check_array(X)
-        n_samples = X.shape[0]
-
-        # 如果是 sklearn 模型（退化情况）
-        if not isinstance(self._model, nn.Module):
-            return self._model.predict(X)
-
-        seq_len = min(self.seq_len, n_samples)
-        # 取最后 seq_len 行组成一个序列预测
-        if n_samples < seq_len:
-            # pad
-            pad = np.zeros((seq_len - n_samples, X.shape[1]), dtype=np.float32)
-            X = np.vstack([pad, X])
-            n_samples = seq_len
-
-        X_seq = X[-seq_len:].reshape(1, seq_len, -1)
-        X_t = torch.tensor(X_seq, dtype=torch.float32).to(self.device)
-        self._model.eval()
-        with torch.no_grad():
-            pred = self._model(X_t).cpu().numpy()
-        return np.full(X.shape[0], pred.item())  # 广播到所有行（简化版）
-
-    def get_params(self, deep=True):
-        return {
-            "model_type": self.model_type, "seq_len": self.seq_len,
-            "hidden": self.hidden, "layers": self.layers,
-            "dropout": self.dropout, "lr": self.lr,
-            "epochs": self.epochs, "batch_size": self.batch_size,
-            "device": self.device, "random_state": self.random_state,
-        }
-
-    def set_params(self, **params):
-        for k, v in params.items():
-            setattr(self, k, v)
-        return self
+        def set_params(self, **params):
+            for k, v in params.items():
+                setattr(self, k, v)
+            return self
 
 
 @dataclass

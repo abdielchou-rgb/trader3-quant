@@ -73,4 +73,6 @@ files = [
     "trader3/base_tool.py",
     "trader3/tools/execution.py",
     "trader3/notify.py",
+    "trader3/v2/shadow_reconcile.py",
+    "trader3/v2/live/qmt_broker.py",
 ]

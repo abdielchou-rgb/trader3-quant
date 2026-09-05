@@ -1,7 +1,7 @@
 # 3号交易员 — Agent 行为约束
 
 > 约束你（Agent）在 **3号交易员 (trader3)** 项目中的行为。核心：**量化工程方法论** + **数据纪律**。
-> 本文件反映 2026-08 深度审计修复后的真实状态（三轮修复，117 tests 全绿）。
+> 本文件反映 2026-09 全量推进后的真实状态（514 tests 基线）。
 
 ---
 
@@ -22,7 +22,7 @@ evolve/             # GP 因子工厂（fwd 已修正为前向收益；训练≤
 config/             # 策略/约束 YAML
 scripts/            # update_market_data.py（qlib_bin 增量管线）等
 shared_state/       # 原子写共享状态 + paper/（纸面账户）+ _quarantine_pre_audit/
-tests/              # 117 个测试；testpaths 已在 pyproject 隔离
+tests/              # 516 个测试（514 passed / 2 skipped 基线）；testpaths 已在 pyproject 隔离
 ```
 
 ## 数据源（重要）
@@ -76,7 +76,7 @@ Standards 轴（风格）与 Spec 轴（需求）分开报告。
 1. **数据必须带来源** — 真实/合成标注清楚，禁止编造；伪造指标（如硬编码 PE/融资余额）一律删除
 2. **门禁必须过** — gates_passed=false 的产出要说明原因，下游不得静默采纳
 3. **量化输出是候选信号，非投资建议**
-4. **测试必须绿** — 当前基线 117 passed
+4. **测试必须绿** — 当前基线 514 passed / 2 skipped
 
 ---
 
@@ -101,7 +101,15 @@ python -m trader3.cli regime
 
 # v2 触发扫描（dry_run 不落库）与每日管线
 python -m trader3.v2.cli_v2 trigger --dry-run
-python tools/daily_routine.py          # 含 qlib_bin 增量更新 + 进化任务
+python tools/daily_routine.py          # 含 qlib_bin 增量更新 + 进化任务 + 影子对账（配置后）
+
+# 深度模型进化（LSTM 候选并入 GP 同一门禁）
+py -3.11 evolve/run_evolution.py --universe csi300 --gen 15 --pop 50 --deep
+
+# 影子对账（配置 QMT_PATH/QMT_ACCOUNT/SHADOW_TARGETS 后由 daily_routine 自动跑）
+py -3.11 -c "from trader3.v2.shadow_reconcile import run_shadow_reconcile; \
+  import os; print(run_shadow_reconcile(targets_path=os.environ['SHADOW_TARGETS'], \
+  qmt_path=os.environ['QMT_PATH'], account_id=os.environ['QMT_ACCOUNT'], simulated=True)['mode'])"
 
 # 数据增量更新（指数默认；成分股加 --stocks）
 python scripts/update_market_data.py --apply [--stocks]
@@ -112,6 +120,16 @@ uvicorn trader3.api.server:app --host 127.0.0.1 --port 8000
 
 ## 已知边界（诚实声明）
 
-- WFA 未计交易成本/涨跌停；ST 名单依赖行情名称字段（缺名 fail-closed）
+- ~~WFA 未计交易成本/涨跌停~~ **已修复**（post-audit-5）：WFA 测试段首日计入单边换手成本并套用涨跌停约束，见 tests/test_fix_signal_source.py
+- ST 名单依赖行情名称字段（缺名 fail-closed）
 - 卖出触发仅入纸面账；extra_sources 默认关闭需环境变量开启
 - financials.db 无公告日列，asof 防前视依赖 AnnouncementCalendar 覆盖度
+- **实盘链路（2026-09 全量推进）**：
+  - `trader3/v2/live/qmt_broker.py` — QMT/miniQMT 适配器（xtquant 缺失 fail-fast；simulated=True 离线 SIM 撮合，订单显式打标 QMT-SIM）
+  - `trader3/v2/shadow_reconcile.py` — 影子对账（ShadowBroker 拦截在先，落盘 shared_state/shadow/shadow_run.json）
+  - `tools/daily_routine.py` Step 5.5 — 配置 QMT_PATH/QMT_ACCOUNT/SHADOW_TARGETS 环境变量后每日影子对账（缺配置静默跳过）
+  - ShadowBroker + runner（`python -m trader3.v2.runner --shadow`）为既有能力；CTP 适配器离线走 SIMULATED
+  - **以上均未经过真实资金环境验证**（QMT 终端联调待做）
+- **深度模型（2026-09 全量推进）**：`evolve/core/deep_model.py` LSTM 打分器（torch 2.13 CPU，无前视/确定性/截尾一致性测试覆盖）；
+  `run_evolution.py --deep` 把 LSTM 候选并入 GP 候选同一筛选门禁（真实 csi300 数据冒烟通过：backend=torch，IC 由 StrategySelector 判定）；
+  torch 缺失时确定性 numpy ridge 回退（显式打标 fallback_used，禁标 LSTM）

@@ -264,3 +264,159 @@ class FactorRiskModel:
             factor_exposure=port_exp,
             var_decomposition=contrib,
         )
+
+    # ---------- 宏观暴露 ----------
+    @staticmethod
+    def macro_exposures(macro: pd.DataFrame) -> pd.DataFrame:
+        """宏观因子暴露：macro 为 (date×macro) 或 (asset×macro) 宽表。
+
+        返回 index=asset 的暴露（单期取末行 / 直接透传）。
+        """
+        if isinstance(macro, pd.Series):
+            macro = macro.to_frame().T
+        if not isinstance(macro.columns, pd.MultiIndex) and len(macro) > 1 and "date" not in str(macro.index.dtype):
+            # 时序表 → 取末行截面暴露
+            return macro.iloc[-1].to_frame().T
+        return macro
+
+    # ---------- 尾部风险 ----------
+    def var_cvar(self, holdings: pd.Series, returns: pd.DataFrame,
+                 alpha: float = 0.95, method: str = "historical") -> tuple[float, float]:
+        """组合 VaR / CVaR（单期收益口径，返回正数表示损失幅度）。
+
+        returns: index=date, columns=asset。
+        """
+        h = holdings.reindex(returns.columns).fillna(0.0)
+        if h.sum() == 0:
+            return 0.0, 0.0
+        port_ret = returns.reindex(columns=h.index).fillna(0.0).values @ h.values
+        if method == "parametric":
+            mu = float(port_ret.mean())
+            sd = float(port_ret.std(ddof=0)) + 1e-12
+            z = _norm_ppf_safe(1.0 - alpha)
+            var = max(0.0, -(mu - z * sd))
+            # CVaR 近似（正态尾部期望）
+            cvar = max(0.0, -(mu - sd * _norm_pdf_safe(z)))
+            return var, cvar
+        # 历史法
+        q = np.percentile(port_ret, (1.0 - alpha) * 100.0)
+        tail = port_ret[port_ret <= q]
+        cvar = float(tail.mean()) if len(tail) else q
+        return max(0.0, -q), max(0.0, -cvar)
+
+    def tracking_error(self, holdings: pd.Series, benchmark: pd.Series,
+                        cov: pd.DataFrame | None = None,
+                        returns: pd.DataFrame | None = None) -> float:
+        """主动收益年化跟踪误差。"""
+        h = holdings.reindex(benchmark.index).fillna(0.0)
+        act = h - benchmark.reindex(h.index).fillna(0.0)
+        if cov is not None:
+            c = cov.reindex(index=h.index, columns=h.index).fillna(0.0).values
+            return float(np.sqrt(max(act.values @ c @ act.values, 0.0)) * np.sqrt(252))
+        if returns is not None:
+            pr = returns.reindex(columns=h.index).fillna(0.0).values @ h.values
+            br = returns.reindex(columns=benchmark.index).fillna(0.0).values @ benchmark.reindex(returns.columns).fillna(0.0).values
+            return float(np.std(pr - br, ddof=0) * np.sqrt(252))
+        return 0.0
+
+
+def _norm_ppf_safe(p: float) -> float:
+    try:
+        from scipy.stats import norm
+
+        return float(norm.ppf(p))
+    except Exception:  # pragma: no cover
+        import math
+
+        if p <= 0.0:
+            return float("-inf")
+        if p >= 1.0:
+            return float("inf")
+        return math.sqrt(2.0) * __import__("statistics").NormalDist().inv_cdf(p)
+
+
+def _norm_pdf_safe(x: float) -> float:
+    import math
+
+    return math.exp(-0.5 * x * x) / math.sqrt(2.0 * math.pi)
+
+
+def neutralize_beta(weights: pd.Series, exposures: pd.DataFrame,
+                    target: float = 0.0) -> pd.Series:
+    """β 中性化：投影权重使组合 beta = target（最小改动）。"""
+    if "beta" not in exposures.columns:
+        return weights
+    b = exposures["beta"].reindex(weights.index).fillna(0.0).values
+    w = weights.reindex(exposures.index).fillna(0.0).values
+    bb = float(b @ b)
+    if bb <= 1e-12:
+        return weights
+    cur = float(b @ w)
+    w = w - (cur - target) / bb * b
+    s = w.sum()
+    if s != 0:
+        w = w / s
+    return pd.Series(w, index=exposures.index).reindex(weights.index).fillna(0.0)
+
+
+def cap_industry(weights: pd.Series, industries: dict[str, str] | pd.Series,
+                 max_w: float) -> pd.Series:
+    """行业权重上限：单行业合计权重不超过 max_w（超限按比例缩放）。"""
+    if not industries or max_w >= 1.0:
+        return weights
+    w = weights.copy()
+    groups: dict[str, list[str]] = {}
+    if isinstance(industries, pd.Series):
+        for ind, mem in industries.groupby(level=0).groups.items():
+            groups[ind] = list(mem)
+    else:
+        for a, ind in industries.items():
+            groups.setdefault(ind, []).append(a)
+    for mem in groups.values():
+        mem = [m for m in mem if m in w.index]
+        if not mem:
+            continue
+        s = float(w[mem].sum())
+        if s > max_w:
+            w[mem] = w[mem] * (max_w / s)
+    return w
+
+
+def apply_risk_constraints(
+    weights: pd.Series,
+    exposures: pd.DataFrame | None = None,
+    cov: pd.DataFrame | None = None,
+    industries: dict[str, str] | None = None,
+    beta_neutral: bool = False,
+    industry_max_weight: float = 1.0,
+    tracking_error_max: float = 0.0,
+    benchmark: pd.Series | None = None,
+) -> pd.Series:
+    """组合风险约束：β 中性 + 行业上限 + 跟踪误差上限（迭代投影）。"""
+    w = weights.copy()
+    gross = float(w.sum())
+    if gross <= 0:
+        return w
+    if beta_neutral and exposures is not None:
+        w = neutralize_beta(w, exposures, target=0.0)
+    if industries is not None and industry_max_weight < 1.0:
+        w = cap_industry(w, industries, industry_max_weight)
+    if tracking_error_max > 0 and benchmark is not None and (cov is not None or True):
+        te = 0.0
+        if cov is not None:
+            te = _te(w, benchmark, cov)
+        if te > tracking_error_max > 0:
+            scale = tracking_error_max / te
+            b = benchmark.reindex(w.index).fillna(0.0)
+            w = b + (w - b) * min(scale, 1.0)
+    s = w.sum()
+    if s != 0:
+        w = w / s * gross
+    return w
+
+
+def _te(w: pd.Series, benchmark: pd.Series, cov: pd.DataFrame) -> float:
+    h = w.reindex(benchmark.index).fillna(0.0)
+    act = h - benchmark.reindex(h.index).fillna(0.0)
+    c = cov.reindex(index=h.index, columns=h.index).fillna(0.0).values
+    return float(np.sqrt(max(act.values @ c @ act.values, 0.0)) * np.sqrt(252))

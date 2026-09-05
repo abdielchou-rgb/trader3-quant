@@ -45,6 +45,9 @@ from core.selection import StrategySelector  # noqa: E402
 
 
 def main():
+    # GBK 控制台兼容：emoji 汇总行不因编码崩溃（内容损失不影响 JSON 落盘）
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(errors="replace")
     parser = argparse.ArgumentParser(description="GP 策略进化工厂")
     parser.add_argument("--source", choices=["qlib", "etf"], default="qlib")
     parser.add_argument("--universe", default="csi300")
@@ -57,6 +60,9 @@ def main():
     parser.add_argument("--pop", type=int, default=50, help="种群大小")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--eval", default="", help="只评估单个表达式（调试）")
+    parser.add_argument("--deep", action="store_true",
+                        help="追加 LSTM 深度打分器候选（torch 优先，缺失时 numpy 回退）")
+    parser.add_argument("--deep-epochs", type=int, default=300, help="LSTM 训练轮数")
     parser.add_argument("--top-k", type=int, default=5, help="最终筛选 Top-K")
     args = parser.parse_args()
 
@@ -142,6 +148,33 @@ def main():
             "source": data_label,
             "values": _eval_node(node, panel),
         })
+
+    # ── LSTM 深度打分器候选（与 GP 候选并列，同一筛选门禁） ──
+    if args.deep:
+        from core.deep_model import train_lstm_scorer
+
+        deep_scores, deep_meta = train_lstm_scorer(
+            panel, fwd, seed=args.seed, epochs=args.deep_epochs
+        )
+        deep_fit = compute_fitness(deep_scores, panel, fwd)
+        candidates.append({
+            "expr": f"LSTM(deep, backend={deep_meta['backend']}, "
+                    f"epochs={args.deep_epochs})",
+            "ic": deep_fit["ic"],
+            "icir": deep_fit["icir"],
+            "monotonicity": deep_fit["monotonicity"],
+            "long_short": deep_fit["long_short"],
+            "fitness": deep_fit["fitness"],
+            "generation": -1,
+            "source": f"{data_label}+lstm",
+            "values": deep_scores,
+        })
+        logger.info(
+            f"LSTM 候选: backend={deep_meta['backend']} "
+            f"IC={deep_fit['ic']:.3f} ICIR={deep_fit['icir']:.3f} "
+            f"({deep_meta['elapsed']}s)"
+            + ("（torch 不可用，numpy 确定性回退）" if deep_meta["fallback_used"] else "")
+        )
 
     # ── 筛选 ──
     selector = StrategySelector()

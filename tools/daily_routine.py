@@ -152,8 +152,8 @@ def main():
             if init > 0 and eq > 0:
                 cum = eq / init - 1.0
                 f1_ann = ((base.get("strategies", {}).get("S2_F1_vwap_gap", {})
-                           .get("periods", {}).get("OOS", {}).get("metrics", {})
-                           .get("年化收益")) or 0.234)
+                            .get("periods", {}).get("OOS", {}).get("metrics", {})
+                            .get("年化收益")) or 0.234)
                 daily_anchor = (1 + f1_ann) ** (1 / 244) - 1
                 watch_lines.append(
                     f"纸面累计 {cum:+.2%} vs F1基线日均锚 {daily_anchor:+.3%}"
@@ -161,6 +161,37 @@ def main():
                 anchor_line = f"\n对照: 纸面累计 {cum:+.2%}（F1 日均锚 {daily_anchor:+.3%}）"
     except Exception as e:
         print(f"  ⚠ 基线对照失败(不阻断): {e}")
+
+    # Step 5.5: 影子对账（回测→实盘并行验证；无 QMT 配置时静默跳过，不阻断）
+    try:
+        qmt_path_env = os.environ.get("QMT_PATH", "")
+        qmt_account_env = os.environ.get("QMT_ACCOUNT", "")
+        shadow_targets = os.environ.get("SHADOW_TARGETS", "")
+        if qmt_path_env and qmt_account_env and os.path.exists(shadow_targets):
+            sys.path.insert(0, PROJECT)
+            from trader3.v2.shadow_reconcile import run_shadow_reconcile
+
+            shadow = run_shadow_reconcile(
+                targets_path=shadow_targets,
+                qmt_path=qmt_path_env,
+                account_id=qmt_account_env,
+                simulated=os.environ.get("QMT_LIVE", "") != "1",
+            )
+            results["shadow_reconcile"] = {
+                "n_orders": shadow.get("n_orders", 0),
+                "mode": shadow.get("mode"),
+            }
+            watch_lines.append(
+                f"影子对账 {shadow.get('n_orders', 0)} 单（{shadow.get('mode')}）"
+            )
+            print(f"  ✓ 影子对账: {shadow.get('n_orders', 0)} 单")
+        else:
+            results["shadow_reconcile"] = {
+                "ok": False, "skipped": True,
+                "reason": "QMT_PATH / QMT_ACCOUNT / SHADOW_TARGETS 未配置",
+            }
+    except Exception as e:
+        print(f"  ⚠ 影子对账失败(不阻断): {e}")
 
     # Step 6: 推送通知（未配置通道时仅日志，不阻断）
     try:

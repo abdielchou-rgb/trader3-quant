@@ -30,6 +30,10 @@ def _make_qlib(tmp_path: Path, cal=None, with_index=True):
     if with_index:
         lines.append(f"SH000300\t{cal[0]}\t{cal[-1]}")
     (data_dir / "instruments" / "all.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    # csi300 成分文件（run_qc 需要；注意测试原文件缺失，护栏测试需补齐）
+    with open(data_dir / "instruments" / "csi300.txt", "w", encoding="utf-8") as f:
+        for c in ("SH600519", "SZ000001"):
+            f.write(f"{c}\t{cal[0]}\t{cal[-1]}\n")
 
     for code, start_day, base in (("sh600519", cal[0], 10.0), ("sz000001", cal[5], 20.0)):
         d = data_dir / "features" / code
@@ -214,3 +218,48 @@ def test_data_version_stamp(tmp_path):
     got = ss.read_json("data_version")
     assert got["versions"]["qlib_bin"] == "2026-01-26"
     assert got["metadata"]["updated_at"]
+
+
+# ── 收尾 QC 护栏（2026-09-03 新增）────────────────────────
+
+
+def _make_clean_qlib(tmp_path, with_jump: bool = False) -> Path:
+    """迷你 qlib：两只无跳变股票。with_jump=True 在 sh600519 注入 1 个 100% 跳变。"""
+    data_dir = _make_qlib(tmp_path)
+    if with_jump:
+        # 在 sh600519 close 中部制造一个非停牌单点跳变（idx 5→6 ×2），不应被豁免
+        p = data_dir / "features" / "sh600519" / "close.day.bin"
+        arr = umd.read_bin(str(p)).copy()
+        arr[6:] = arr[5] * 2.0
+        umd.write_bin_atomic(str(p), arr)
+    return data_dir
+
+
+def test_qc_guard_passes_on_clean_data(tmp_path, monkeypatch):
+    """干净数据 → QC 护栏 ok=True。"""
+    data_dir = _make_clean_qlib(tmp_path)
+    # post_qc_guard 内部走 data_qc.save_report —— patch 到真实引用处
+    import trader3.v2.data_qc as dqc
+
+    def fake_save(report, path=None):
+        return str(tmp_path / "qc_report.json")
+
+    monkeypatch.setattr(dqc, "save_report", fake_save)
+    res = umd.post_qc_guard(str(data_dir), universe="csi300", tolerance_critical=0)
+    assert res["ok"] is True
+    assert res["critical"] == 0
+    assert res["stock_contract"] == 0
+
+
+def test_qc_guard_flags_jumped_data(tmp_path, monkeypatch):
+    """带 100% 跳变股 → critical>0 → ok=False（护栏应告警）。"""
+    data_dir = _make_clean_qlib(tmp_path, with_jump=True)
+    import trader3.v2.data_qc as dqc
+
+    def fake_save(report, path=None):
+        return str(tmp_path / "qc_report.json")
+
+    monkeypatch.setattr(dqc, "save_report", fake_save)
+    res = umd.post_qc_guard(str(data_dir), universe="csi300", tolerance_critical=0)
+    assert res["critical"] >= 1
+    assert res["ok"] is False

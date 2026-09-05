@@ -1,8 +1,9 @@
-"""Qlib 二进制行情数据源解析测试（真实数据在 2hao-analyst 项目下，缺失则跳过）。"""
+"""Qlib 二进制行情数据源解析测试（真实数据默认探测兄弟目录 2hao-analyst，可用 QLIB_BIN 覆盖；缺失则跳过）。"""
 
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 import pandas as pd
 import pytest
@@ -10,8 +11,9 @@ import pytest
 from trader3.v2.data_sources import QlibDataSource, make_panel_source
 from trader3.v2.panel_builder import build_panel
 
+_ROOT = Path(__file__).resolve().parent.parent
 QLIB_BIN = os.environ.get(
-    "QLIB_BIN", r"D:\Claude\projects\2hao-analyst\data\qlib_bin"
+    "QLIB_BIN", str(_ROOT.parent / "2hao-analyst" / "data" / "qlib_bin")
 )
 HAVE_QLIB = os.path.isdir(QLIB_BIN)
 

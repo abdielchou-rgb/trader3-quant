@@ -3,15 +3,48 @@ __pycache__/
 *.py[cod]
 *.egg-info/
 .pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
 .venv/
+build/
+dist/
 
-# 项目临时与可再生产物
+# 运行态产物（可再生产物不入库）
 temp/
 shared_state/backtest_cache/
+shared_state/paper/
+shared_state/shadow/
+shared_state/scheduler_state.json
+shared_state/regime_current.json
+shared_state/data_version.json
+shared_state/data_version.json.lock
+shared_state/factor_watch/
+shared_state/debate_log/
+shared_state/_quarantine_pre_audit/
+evolve/evolution_log/
+evolve/evolution_log_quarantine/
+evolve/experiments/
+evolve/last_daily_run.json
+evolve/strategies/selected.json
+evolve/strategies/evolution_summary.json
 data/kline_cache/
+data/minute_5/
+data/.fuse_hidden*
 
 # 数据库运行时锁文件
 *.db-wal
 *.db-shm
 *.log
-data/minute_5/
+
+# 本地运行数据（events/watchlist 为本地运行时生成）
+data/events.db
+data/watchlist.db
+data/watchlist_demo.db
+data/qc_report.json
+data/disclosure_calendar.json
+data/permission_test.txt
+
+# 编辑器
+.vscode/
+.idea/

@@ -1,6 +1,6 @@
 r"""
 P1-② 每周策略汇总报告
-用法：python weekly_report.py [--output D:\Marvis\output\] [--week 2026-08-11]
+用法：python weekly_report.py [--output <dir>] [--week 2026-08-11]
 """
 import argparse
 import json
@@ -9,7 +9,7 @@ import sys
 from collections import defaultdict
 from datetime import datetime, timedelta
 
-PROJECT = r"D:\Claude\projects\3号交易员"
+PROJECT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 STATE_FILE = os.path.join(PROJECT, "evolve", "last_daily_run.json")
 BY_UNIVERSE = os.path.join(PROJECT, "evolve", "strategies", "by_universe")
 

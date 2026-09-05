@@ -155,8 +155,18 @@ def _check_stock(dp: QlibDataProvider, data_dir: str, code: str,
         rets = b / a - 1.0
         bad = np.flatnonzero(np.abs(rets) > jump_threshold)
         for pos in bad[:PER_STOCK_EVENT_CAP]:
+            # 豁免真实"长期停牌 → 复牌"事件：跳变前若相邻有效日之间在 bin 内
+            # 存在 ≥1 个 0 占位（停牌期），则该收益跨越停牌段，属真实事件而非脏数据
+            # （如 ST 重整复牌 +300%、股改停牌复牌等）。此类 close_jump 降级为 warning。
+            i_prev, i_next = valid_idx[pos], valid_idx[pos + 1]
+            halted = int(np.sum(~((close[i_prev + 1:i_next] > 0)
+                                  & np.isfinite(close[i_prev + 1:i_next]))))
+            # 次新豁免：上市后前 5 个交易日（新股上市前 5 日无涨跌幅限制，真实大波动）。
+            # 只用前 5 日（非 20）——避免把测试/老股中段跳变误豁免。
+            is_newish = int(valid_idx[pos]) < 5
+            severity = "warning" if (halted >= 1 or is_newish) else "critical"
             offenders.append(
-                _offender(code, "close_jump", round(float(rets[pos]), 4), "critical"))
+                _offender(code, "close_jump", round(float(rets[pos]), 4), severity))
 
     high = _read_bin_raw(data_dir, code, "high")
     low = _read_bin_raw(data_dir, code, "low")

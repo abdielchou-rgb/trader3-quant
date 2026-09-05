@@ -2,12 +2,13 @@
 """risk_overlay / sentiment / multi_asset 模块测试"""
 
 import sys
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import pytest
 
-sys.path.insert(0, r"D:\Claude\projects\3号交易员")
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from trader3.v2.multi_asset import (
     AssetType,
@@ -148,8 +149,11 @@ class TestSentiment:
 
     def test_store_roundtrip_and_window(self, tmp_path):
         st = SentimentStore(state_dir=str(tmp_path))
-        st.write({"600519": 1.2, "000858": -0.5}, date="20260826")
-        got = st.read("20260826")
+        # 写入使用真实当天日期（window_frame 按自然日窗口取近 N 天，
+        # 固定历史日期在窗口滚过后必然读空——测试应写今天而非硬编码日期）。
+        today = pd.Timestamp.now().strftime("%Y%m%d")
+        st.write({"600519": 1.2, "000858": -0.5}, date=today)
+        got = st.read(today)
         assert got == {"600519": 1.2, "000858": -0.5}
         frame = st.window_frame(days=5)
         assert "600519" in frame.columns or frame.empty is False

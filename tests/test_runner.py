@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+from pathlib import Path
 
 from trader3.v2.config import Settings
 from trader3.v2.live.broker_base import ShadowBroker
@@ -13,8 +14,9 @@ from trader3.v2.runner import (
     summarize,
 )
 
+_ROOT = Path(__file__).resolve().parent.parent
 QLIB_BIN = os.environ.get(
-    "QLIB_BIN", r"D:\Claude\projects\2hao-analyst\data\qlib_bin"
+    "QLIB_BIN", str(_ROOT.parent / "2hao-analyst" / "data" / "qlib_bin")
 )
 
 

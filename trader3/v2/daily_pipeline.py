@@ -43,6 +43,8 @@ def run_daily(
     dry_run: bool = False,
     paper_trading: bool = True,
     overlay=None,
+    debate_review: bool = False,
+    debate_llm_fn=None,
 ) -> dict:
     """当日全量扫描。返回 {collected, results, alerts, paper_trading}。
 
@@ -52,6 +54,10 @@ def run_daily(
     overlay：可选 trader3.v2.risk_overlay.OverlayResult——组合级风险覆盖层，
         调节每单资金比例（size_multiplier）或暂停新开仓（halt_new_buys）。
         由调用方经 compute_risk_overlay 预先计算；缺省 None 行为不变。
+    debate_review：P2-6 多空辩论复核（默认关）。开启后对已触发信号逐只
+        组织看多/看空辩论（LLM 缺省走规则版），verdict=veto 的信号
+        从 triggered 中剔除并写入 caveats（"辩论否决：..."）；
+        任何辩论失败静默放行，不阻断主链路。结果落 shared_state/debate_log/。
     """
     from trader3.v2.collector import DataCollector
     from trader3.v2.trigger import apply_trigger_transition, get_trigger_engine
@@ -89,6 +95,30 @@ def run_daily(
 
     # 3. 状态迁移（两段式白名单：观察中→关注→买入区间；dry_run 跳过）
     triggered = [r for r in results if r.triggered]
+
+    # 3.5 多空辩论复核（P2-6，默认关）：veto 的信号退出 triggered 并记 caveat
+    debate_verdicts: dict[str, dict] = {}
+    if debate_review and triggered:
+        try:
+            from trader3.v2.debate import debate_batch
+            verdicts = debate_batch(triggered, llm_fn=debate_llm_fn)
+            vetoed = []
+            for r in triggered:
+                v = verdicts.get(r.code)
+                if v is not None:
+                    debate_verdicts[r.code] = v.to_dict()
+                    if v.is_veto:
+                        r.caveats.append(f"辩论否决：{v.bear.claim[:60]}")
+                        vetoed.append(r)
+            if vetoed:
+                logger.info("[daily] 辩论否决 %d 个信号: %s", len(vetoed),
+                            [r.code for r in vetoed])
+                triggered = [r for r in triggered if r not in vetoed]
+        except Exception as e:  # noqa: BLE001
+            logger.warning("[daily] 辩论复核失败（放行全部信号）: %s", e)
+    if debate_verdicts:
+        summary["debate"] = debate_verdicts
+
     if not dry_run:
         for r in results:
             apply_trigger_transition(wl, r)
@@ -360,6 +390,8 @@ def main():
     parser.add_argument("--collect-only", action="store_true", help="仅采集不扫描")
     parser.add_argument("--no-flow", action="store_true", help="跳过市场事件采集")
     parser.add_argument("--no-paper", action="store_true", help="跳过纸面交易（默认开启）")
+    parser.add_argument("--debate", action="store_true",
+                        help="开启多空辩论复核（默认关；LLM 缺省走规则辩论）")
     flags = parser.parse_args()
 
     codes = [c.strip() for c in flags.codes.split(",") if c.strip()] if flags.codes else None
@@ -368,6 +400,7 @@ def main():
         collect_only=flags.collect_only,
         collect_flow=not flags.no_flow,
         paper_trading=not flags.no_paper,
+        debate_review=flags.debate,
     )
     print(format_alerts(summary))
 

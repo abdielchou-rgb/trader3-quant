@@ -55,6 +55,15 @@ class QuantPipelineConfig:
     # ── 嵌套执行 ──
     use_nested_execution: bool = False     # 组合层+执行层联合优化（冲击回灌+交易轨迹）
     nested_horizon: int = 5                # 执行跨度（期）
+    # ── Barra 风险约束（P1-2）──
+    beta_neutral: bool = False             # β 中性（需 panel 构建风格暴露）
+    industry_max_weight: float = 1.0        # 单行业合计权重上限（<1 启用，需 industries 映射）
+    tracking_error_max: float = 0.0         # 年化跟踪误差上限（>0 启用，需 cov）
+    # ── 子单调度（P1-6）──
+    use_child_scheduling: bool = False      # 把父单拆 TWAP/VWAP 子单按节奏提交
+    child_method: str = "twap"              # twap | vwap
+    child_slices: int = 10
+    child_horizon: float = 60.0             # 执行跨度（秒，回测可缩放为 0）
 
 
 # regime 标签 -> (方法, gross 敞口系数)
@@ -246,8 +255,23 @@ async def run_quant_pipeline(
         rets = _asset_returns(panel)
 
     pc = PortfolioConstruction(PortfolioConfig(
-        method=method, top_n=cfg.top_n, max_single=cfg.max_single, gross_cap=gross_cap))
-    weights = pc.construct(scores, cov=cov, returns=rets, overlay=overlay)
+        method=method, top_n=cfg.top_n, max_single=cfg.max_single, gross_cap=gross_cap,
+        beta_neutral=cfg.beta_neutral, industry_max_weight=cfg.industry_max_weight,
+        tracking_error_max=cfg.tracking_error_max))
+    exposures = None
+    if (cfg.beta_neutral or cfg.industry_max_weight < 1.0 or cfg.tracking_error_max > 0.0) and panel is not None:
+        from trader3.v2.risk_model import FactorRiskModel
+
+        exposures = FactorRiskModel.build_style_exposures(panel)
+    weights = pc.construct(scores, cov=cov, returns=rets, overlay=overlay, exposures=exposures)
+    if weights is None or len(weights) == 0:
+        return {"scores": scores, "weights": pd.Series(dtype=float),
+                "orders": [], "equity": 0.0, "meta": {"halted": True}}
+    benchmark = None
+    if cfg.tracking_error_max > 0.0 and exposures is not None:
+        benchmark = pd.Series(1.0 / len(weights), index=weights.index)
+        weights = pc.construct(scores, cov=cov, returns=rets, overlay=overlay,
+                               exposures=exposures, benchmark=benchmark)
     if weights is None or len(weights) == 0:
         return {"scores": scores, "weights": pd.Series(dtype=float),
                 "orders": [], "equity": 0.0, "meta": {"halted": True}}
@@ -312,12 +336,28 @@ async def run_quant_pipeline(
         if cfg.use_nested_execution and panel is not None:
             try:
                 from trader3.v2.nested_execution import NestedExecutor, NestedExecutorConfig
-                if isinstance(scores, pd.DataFrame) and isinstance(
-                        scores.index, pd.MultiIndex):
-                    alpha = scores.xs(scores.index.get_level_values(0)[-1], level=0)
-                else:
-                    alpha = scores
+                # 规整 alpha 为 1D asset Series（solve 契约）：
+                # MoE/ensemble 产出通常为 MultiIndex (date, asset) Series；取最新 date 截面，
+                # 保证 asset 唯一且与 cov/weights 对齐（否则 pandas 抛
+                # "cannot join with no overlapping index names" / duplicate labels）。
+                alpha = scores
+                if isinstance(alpha, pd.DataFrame):
+                    # (date×asset) 宽表：取末行
+                    if isinstance(alpha.index, pd.MultiIndex):
+                        alpha = alpha.iloc[-1]
+                    else:
+                        alpha = alpha.iloc[-1]
+                if isinstance(alpha.index, pd.MultiIndex):
+                    # (date, asset) 长表：取最新 date 的截面
+                    date_lv = alpha.index.get_level_values(0)
+                    last_date = date_lv[-1]
+                    alpha = alpha.xs(last_date, level=0)
+                alpha = alpha.reindex(weights.index).fillna(0.0)
+                alpha.index = weights.index
                 ne_cov = _asset_covariance(_asset_returns(panel), cfg.ewma_cov_lambda)
+                ne_cov = ne_cov.reindex(index=weights.index, columns=weights.index).fillna(0.0)
+                ne_cov.index = weights.index
+                ne_cov.columns = weights.index
                 ne = NestedExecutor(NestedExecutorConfig(horizon=cfg.nested_horizon))
                 plan = ne.solve(alpha, ne_cov, weights, equity,
                                 prices, _adv_from_panel(panel))
@@ -351,7 +391,22 @@ async def run_quant_pipeline(
             orders = kept
             result["meta"]["cost_gated_out"] = gated
 
-        placed = await om.submit(orders, broker)
+        # 子单调度：把父单拆 TWAP/VWAP 子单按节奏提交（否则直接提交父单）
+        if cfg.use_child_scheduling and orders:
+            from trader3.v2.child_orders import ChildOrderSchedulerConfig, execute_child_orders
+
+            cos_cfg = ChildOrderSchedulerConfig(
+                method=cfg.child_method, n_slices=cfg.child_slices, horizon=cfg.child_horizon)
+            try:
+                placed = await execute_child_orders(orders, broker, cos_cfg)
+                result["meta"]["child_scheduling"] = {
+                    "method": cfg.child_method, "n_slices": cfg.child_slices, "n_parent": len(orders)}
+            except Exception as e:  # noqa: BLE001
+                logger.warning("[quant_pipeline] 子单调度失败，退回原父单提交: %s", e)
+                placed = await om.submit(orders, broker)
+        else:
+            placed = await om.submit(orders, broker)
+
         result["orders"] = placed
         result["meta"]["n_orders"] = len(placed)
 

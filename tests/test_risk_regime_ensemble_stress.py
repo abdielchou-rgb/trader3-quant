@@ -2,12 +2,13 @@
 """risk_model / regime / ensemble / stress 模块测试"""
 
 import sys
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import pytest
 
-sys.path.insert(0, r"D:\Claude\projects\3号交易员")
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from trader3.tools.stress import (
     compute_tail_metrics,

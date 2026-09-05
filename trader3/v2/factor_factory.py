@@ -44,6 +44,9 @@ class FactorMetrics:
     cv_ic_t: float = float("nan")      # CV 聚合 OOS t 统计量（更保守）
     cv_stability: float = float("nan")  # 1 - std/|mean|，越接近 1 越稳
     deflated_sharpe: float = 0.0       # 多重检验校正后的夏普
+    pool_ic_gain: float = float("nan")  # 入池后合成组合 OOS RankIC 增益（协同性）
+    pool_ic_after: float = float("nan") # 入池后合成组合 OOS RankIC（含本因子）
+    pool_ic_before: float = float("nan")# 入池前合成组合 OOS RankIC（仅库内已有）
     passed: bool = False
     reason: str = ""
     generation: int = 0
@@ -57,17 +60,57 @@ class FactorCandidate:
 
 
 # (假设描述, 表达式模板, 参数网格) —— {L} 被替换为时延/窗口
+# 因子动物园：覆盖动量/反转/波动率/流动性/估值/质量/微观结构/截面 多家族
 _TEMPLATE_SPECS: list[tuple[str, str, list[int]]] = [
-    ("短期动量", "sub(close, delay(close, {L}))", [5, 10, 20]),
+    # ── 动量家族 ──
+    ("短期动量", "sub(close, delay(close, {L}))", [5, 10, 20, 60]),
+    ("中期动量", "sub(delay(close, {L}), delay(close, 60))", [20, 60]),
+    ("长期动量", "sub(close, delay(close, {L}))", [120, 250]),
+    ("动量加速度", "sub(sub(close, delay(close, {L})), sub(delay(close, {L}), delay(close, 1)))", [10, 20]),
+    # ── 反转家族 ──
     ("短期反转", "sub(delay(close, {L}), close)", [5, 10, 20]),
+    ("隔夜反转", "sub(delay(close, 1), close)", [0]),
+    ("振幅反转", "sub(close, ts_mean(close, {L}))", [20, 60, 120]),
+    # ── 波动率家族 ──
+    ("收益率波动率", "ts_std(close, {L})", [10, 20, 60]),
+    ("下行波动率", "ts_std(sub(close, delay(close, 1)), {L})", [20, 60]),
+    ("振幅率", "div(sub(high, low), close)", [0]),
+    ("波动率变化", "sub(ts_std(close, {L}), delay(ts_std(close, {L}), {L}))", [20]),
+    # ── 流动性家族 ──
     ("成交量变化率", "div(volume, delay(volume, {L}))", [5, 10, 20]),
     ("成交额动量", "sub(amount, delay(amount, {L}))", [5, 10, 20]),
-    ("收益率波动率", "ts_std(close, {L})", [10, 20]),
-    ("价格乖离度", "sub(close, ts_mean(close, {L}))", [20, 60]),
-    ("量价共振", "mul(sub(close, delay(close, {L})), rank(volume))", [5, 10]),
+    ("流动性缩放", "div(amount, delay(amount, {L}))", [10, 20]),
+    ("量比", "div(volume, ts_mean(volume, {L}))", [20, 60]),
+    ("成交额占比", "div(amount, ts_mean(amount, {L}))", [20, 60]),
+    # ── 估值/质量代理（用价量近似）──
+    ("价格乖离度", "div(close, ts_mean(close, {L}))", [60, 120, 250]),
     ("VWAP 偏离", "sub(close, vwap)", [0]),
+    ("VWAP 斜率", "sub(vwap, delay(vwap, {L}))", [5, 10, 20]),
+    ("量价共振", "mul(sub(close, delay(close, {L})), rank(volume))", [5, 10, 20]),
+    ("量价背离", "mul(sub(close, delay(close, {L})), sub(delay(volume, {L}), volume))", [10]),
+    ("资金流", "mul(sub(close, delay(close, {L})), amount)", [5, 10, 20]),
+    # ── 微观结构 ──
     ("日内振幅", "sub(high, low)", [0]),
+    ("实体比", "div(abs(sub(close, delay(close, 1))), sub(high, low))", [0]),
+    ("上影线", "div(sub(high, max(close, delay(close, 1))), close)", [0]),
+    ("下影线", "div(sub(min(close, delay(close, 1)), low), close)", [0]),
+    ("振幅加速", "sub(sub(high, low), delay(sub(high, low), {L}))", [5, 10]),
+    # ── 截面家族 ──
     ("截面强度", "zscore(close)", [0]),
+    ("截面动量", "zscore(sub(close, delay(close, {L})))", [10, 20]),
+    ("截面换手", "zscore(volume)", [0]),
+    ("截面流动性", "zscore(log(amount))", [0]),
+    ("相对强度", "rank(div(close, ts_mean(close, {L})))", [60, 120]),
+    ("龙头效应", "sub(rank(close), rank(amount))", [0]),
+    # ── 相关/结构 ──
+    ("价量相关", "ts_corr(close, volume, {L})", [20, 60]),
+    ("高低相关", "ts_corr(high, low, {L})", [20]),
+    ("波动聚集", "ts_corr(abs(sub(close, delay(close, 1))), abs(sub(close, delay(close, 1))), {L})", [10, 20]),
+    ("均值回归速度", "ts_corr(close, delay(close, {L}), {L})", [10, 20]),
+    # ── 复合 ──
+    ("动量质量", "mul(zscore(sub(close, delay(close, {L}))), div(amount, ts_mean(amount, {L})))", [20]),
+    ("低波动量", "mul(sub(close, delay(close, {L})), div(1, ts_std(close, {L})))", [20, 60]),
+    ("反转质量", "mul(sub(delay(close, {L}), close), div(volume, ts_mean(volume, {L})))", [10]),
 ]
 
 
@@ -121,6 +164,9 @@ class FactorFactoryConfig:
     cv_bottom_frac: float = 0.2
     cv_strict: bool = False       # True：仅以 Purged-CV t 为准（生产推荐，杜绝乐观偏差）
     dsr_min: float = 0.0          # 缩水夏普下限（>0 时启用硬闸）
+    pool_ic_gain_min: float = -0.005  # 入池后组合增益下限（低于此值候选不通过；
+                                      # alphagen 池化思想：单因子强但拖累组合者剔除）
+    pool_horizon: int = 5         # 合成组合的收益期（与 fwd 对齐）
 
 
 def _row_rank_ic(fr: pd.Series, ff: pd.Series) -> float:
@@ -275,6 +321,10 @@ class FactorFactory:
                                     cfg.min_train, cfg.cv_horizon, n_trials)
 
         corr = self._redundancy(factor, panel)
+        # alphagen 池化思想：评估"加入现有库"后合成组合 OOS RankIC 的增益。
+        # 单因子强但拖累组合者（增益低于下限）不通过——协同性进入搜索目标。
+        pool_ic_before, pool_ic_after, pool_ic_gain = self._pool_gain(
+            factor, panel, fwd, cfg.pool_horizon)
         # OOS t 统计量：扩张窗口或 Purged-CV 任一达标即视为具备样本外预测力
         # （生产环境建议置 cv_strict=True，仅以 CV 为准以杜绝泄漏/乐观偏差）
         tstat_eff = cv["ic_t"] if cfg.cv_strict else max(tstat, cv["ic_t"])
@@ -283,6 +333,7 @@ class FactorFactory:
             and tstat_eff >= cfg.tstat_min
             and pos_ratio >= cfg.ic_pos_min and corr <= cfg.corr_max
             and (cfg.dsr_min <= 0 or cb["deflated_sharpe"] >= cfg.dsr_min)
+            and (np.isnan(pool_ic_gain) or pool_ic_gain >= cfg.pool_ic_gain_min)
         )
         reason = ("ok" if passed else
                   self._fail_reason(ic_mean, tstat_eff, pos_ratio, corr, cfg))
@@ -295,7 +346,61 @@ class FactorFactory:
             cv_ic=round(cv["ic_mean"], 4), cv_ic_t=round(cv["ic_t"], 3),
             cv_stability=round(cv["stability"], 3),
             deflated_sharpe=round(cb["deflated_sharpe"], 3),
+            pool_ic_gain=round(pool_ic_gain, 4),
+            pool_ic_after=round(pool_ic_after, 4),
+            pool_ic_before=round(pool_ic_before, 4),
             passed=passed, reason=reason, generation=cand.generation)
+
+    def _pool_gain(self, factor: pd.DataFrame, panel: pd.DataFrame,
+                   fwd: pd.DataFrame, horizon: int = 5
+                   ) -> tuple[float, float, float]:
+        """计算 (入池前组合 IC, 入池后组合 IC, 增益)。
+
+        合成方式：库内已有因子(等权合成，因各因子 IC 量纲不可直接比) rank 截面均值
+        —— 与因子工厂"ICIR 加权"口径保持一致的轻量代理（无历史 IC 权重时退等权）。
+        入池前 = 仅库内；入池后 = 库内 + 本因子。返回 nan-safe 的均值 RankIC。
+        """
+        if not self.registry.items:
+            # 空库：入池前无组合可算（before=nan），首因子不设池增益门槛
+            return float("nan"), float("nan"), 0.0
+        assets = factor.columns
+        base_frames: list[pd.DataFrame] = []
+        for expr in self.registry.exprs():
+            other = self._registry_series_cache.get(expr)
+            if other is None:
+                try:
+                    other = self.dsl.full_series(expr, panel)
+                    self._registry_series_cache[expr] = other
+                except Exception:
+                    continue
+            # 列对齐到本因子资产
+            other = other.reindex(columns=assets)
+            base_frames.append(other.rank(axis=1))
+        if not base_frames:
+            return float("nan"), float("nan"), 0.0
+        base_combo = sum(base_frames) / len(base_frames)  # 库内等权组合
+        new_combo = (base_combo * len(base_frames) + factor.rank(axis=1)) / (len(base_frames) + 1)
+
+        def _mean_oos_ic(signal: pd.DataFrame) -> float:
+            ics = []
+            fwd_t = fwd.reindex(columns=assets)
+            T = len(signal)
+            for start in range(min(60, T // 3), T):
+                mu = signal.iloc[:start].stack().mean()
+                sd = signal.iloc[:start].stack().std() + 1e-9
+                t = signal.index[start]
+                if t not in fwd_t.index:
+                    continue
+                fr = (signal.loc[t] - mu) / sd
+                ic = _row_rank_ic(fr, fwd_t.loc[t])
+                if not np.isnan(ic):
+                    ics.append(ic)
+            return float(np.mean(ics)) if ics else float("nan")
+
+        before = _mean_oos_ic(base_combo)
+        after = _mean_oos_ic(new_combo)
+        gain = (after - before) if (np.isfinite(before) and np.isfinite(after)) else float("nan")
+        return before, after, gain
 
     def _redundancy(self, factor: pd.DataFrame, panel: pd.DataFrame) -> float:
         if not self.registry.items:
@@ -378,11 +483,11 @@ class FactorFactory:
 
 
 def run_factor_factory(panel: pd.DataFrame, fwd: pd.DataFrame | None = None,
-                       *, use_llm: bool = False, llm_fn=None,
-                       generations: int = 1,
-                       config: FactorFactoryConfig | None = None,
-                       registry_path: str | Path = "shared_state/factor_registry.json"
-                       ) -> tuple[list[FactorMetrics], FactorRegistry]:
+                        *, use_llm: bool = False, llm_fn=None,
+                        generations: int = 1,
+                        config: FactorFactoryConfig | None = None,
+                        registry_path: str | Path = "shared_state/factor_registry.json"
+                        ) -> tuple[list[FactorMetrics], FactorRegistry]:
     """便利入口：在 panel 上跑因子工厂，返回 (通过因子, 仓库)。"""
     fwd = fwd if fwd is not None else _default_forward(panel)
     fac = FactorFactory(FactorRegistry(registry_path), config)
@@ -392,6 +497,71 @@ def run_factor_factory(panel: pd.DataFrame, fwd: pd.DataFrame | None = None,
     else:
         accepted = fac.run(panel, fwd, use_llm=use_llm, llm_fn=llm_fn)
     return accepted, fac.registry
+
+
+def _llm_critique(metrics: list[FactorMetrics], llm_fn) -> list[FactorMetrics]:
+    """让 LLM 对一代候选做批判，返回其建议保留的子集（离线/异常则原样返回）。"""
+    if not metrics:
+        return metrics
+    lines = "\n".join(
+        f"- {m.expr} | IC={m.ic} t={m.tstat} 稳定性={m.cv_stability} "
+        f"DSR={m.deflated_sharpe} 冗余={m.corr_with_existing} passed={m.passed}"
+        for m in metrics
+    )
+    prompt = (
+        "你是量化研究员。下面是一代候选因子的评估结果，请保留有研究价值者，"
+        "丢弃冗余/脆弱/过拟合的。只输出保留因子的表达式，每行一个，原样照搬：\n"
+        f"{lines}\n保留："
+    )
+    try:
+        out = llm_fn(prompt)
+        keeps = {ln.strip() for ln in str(out).splitlines() if ln.strip()}
+        if keeps:
+            return [m for m in metrics if m.expr in keeps]
+    except Exception as e:  # noqa: BLE001
+        logger.warning("[factor_factory] LLM 批判失败，保留本代: %s", e)
+    return metrics
+
+
+def run_research_agent(panel: pd.DataFrame, fwd: pd.DataFrame | None = None,
+                       *, generations: int = 3, use_llm: bool = False,
+                       llm_fn=None, config: FactorFactoryConfig | None = None,
+                       registry_path: str | Path = "shared_state/factor_registry.json"
+                       ) -> tuple[list[FactorMetrics], FactorRegistry]:
+    """LLM 研究代理闭环（P1-5）：多代 提出→评估→(LLM 批判)→回滚退化代。
+
+    离线（无 llm_fn）下退化为离线模板 + 变异精炼，仍执行“代际回滚”以防过拟合退化。
+    返回 (最终通过因子, 仓库)。
+    """
+    fwd = fwd if fwd is not None else _default_forward(panel)
+    fac = FactorFactory(FactorRegistry(registry_path), config)
+    all_accepted: list[FactorMetrics] = []
+    leader_ic = float("-inf")
+    for g in range(generations):
+        before = len(fac.registry.items)
+        cands = fac.propose_offline(fac.config.n_propose)
+        if use_llm and llm_fn:
+            cands += fac.propose_llm(fac.config.n_propose, llm_fn)
+        for c in cands:
+            c.generation = g
+        accepted = fac._evaluate_all(cands, panel, fwd)
+        if use_llm and llm_fn:
+            accepted = _llm_critique(accepted, llm_fn)
+        gen_best = max((m.ic for m in accepted), default=float("-inf"))
+        if gen_best <= leader_ic and g > 0:
+            # 本代未超越历史最优 → 回滚本代入库，保留更强历史状态
+            fac.registry.items = fac.registry.items[:before]
+            logger.info("[research_agent] 第 %d 代未超越历史最优，回滚", g)
+        else:
+            leader_ic = gen_best
+        all_accepted.extend(accepted)
+    fac.registry.save()
+    # 去重保留每表达式最优一条
+    best: dict[str, FactorMetrics] = {}
+    for m in all_accepted:
+        if m.expr not in best or m.ic > best[m.expr].ic:
+            best[m.expr] = m
+    return list(best.values()), fac.registry
 
 
 def _default_forward(panel: pd.DataFrame, horizon: int = 5) -> pd.DataFrame:
