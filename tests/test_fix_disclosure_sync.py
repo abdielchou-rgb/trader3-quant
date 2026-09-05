@@ -89,7 +89,7 @@ def test_sync_writes_calendar(ds, cal_path, monkeypatch):
         _row("600519", "2026-07-16", actual="2026-07-15"),
         _row("000858", "2026-08-28"),
     ])
-    monkeypatch.setattr(ds.ak, "stock_yysj_em", lambda **kw: df)
+    monkeypatch.setattr(ds.ak, "stock_yysj_em", lambda **kw: df, raising=False)
     res = ds.sync_disclosure_dates("2026-06-30")
     assert res["synced"] == 2
     data = json.loads(cal_path.read_text(encoding="utf-8"))
@@ -106,7 +106,9 @@ def test_financials_asof_prefers_explicit(ds, cal_path, tmp_path, monkeypatch):
         json.dumps({"600519": {"2026-06-30": "2026-07-16"}}, ensure_ascii=False),
         encoding="utf-8",
     )
-    monkeypatch.setattr(ds.ak, "stock_yysj_em", lambda **kw: (_ for _ in ()).throw(AssertionError("不应联网")))
+    monkeypatch.setattr(ds.ak, "stock_yysj_em",
+                        lambda **kw: (_ for _ in ()).throw(AssertionError("不应联网")),
+                        raising=False)
     from trader3.v2.announcement_calendar import AnnouncementCalendar
     cal = AnnouncementCalendar.__new__(AnnouncementCalendar)
     cal.fp = FakeFP(tmp_path / "fake_events.db")
@@ -124,10 +126,10 @@ def test_financials_asof_prefers_explicit(ds, cal_path, tmp_path, monkeypatch):
 def test_idempotent_overwrite(ds, cal_path, monkeypatch):
     df1 = _df([_row("600519", "2026-07-16")])
     df2 = _df([_row("600519", "2026-08-01")])
-    monkeypatch.setattr(ds.ak, "stock_yysj_em", lambda **kw: df1)
+    monkeypatch.setattr(ds.ak, "stock_yysj_em", lambda **kw: df1, raising=False)
     r1 = ds.sync_disclosure_dates("2026-06-30")
     assert r1["synced"] == 1
-    monkeypatch.setattr(ds.ak, "stock_yysj_em", lambda **kw: df2)
+    monkeypatch.setattr(ds.ak, "stock_yysj_em", lambda **kw: df2, raising=False)
     r2 = ds.sync_disclosure_dates("2026-06-30")
     assert r2["synced"] == 1
     data = json.loads(cal_path.read_text(encoding="utf-8"))
@@ -139,7 +141,7 @@ def test_main_source_failure_degrades(ds, cal_path, monkeypatch):
     def boom(**kw):
         raise RuntimeError("network down")
 
-    monkeypatch.setattr(ds.ak, "stock_yysj_em", boom)
+    monkeypatch.setattr(ds.ak, "stock_yysj_em", boom, raising=False)
     res = ds.sync_disclosure_dates("2026-06-30")
     assert res["synced"] == 0
     assert not cal_path.exists()
@@ -147,7 +149,7 @@ def test_main_source_failure_degrades(ds, cal_path, monkeypatch):
 
 def test_quarter_filter_codes(ds, cal_path, monkeypatch):
     df = _df([_row("600519", "2026-07-16"), _row("000858", "2026-08-28")])
-    monkeypatch.setattr(ds.ak, "stock_yysj_em", lambda **kw: df)
+    monkeypatch.setattr(ds.ak, "stock_yysj_em", lambda **kw: df, raising=False)
     res = ds.sync_disclosure_dates("2026-06-30", codes=["600519"])
     assert res["synced"] == 1
     data = json.loads(cal_path.read_text(encoding="utf-8"))

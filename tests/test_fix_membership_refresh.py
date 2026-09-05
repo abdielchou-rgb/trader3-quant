@@ -63,7 +63,7 @@ def _read_rows(inst: Path) -> list[tuple[str, ...]]:
 @pytest.fixture
 def fake_cons(monkeypatch):
     """按探针实测列名 monkeypatch akshare 双接口（全离线）。"""
-    import akshare as ak
+    ak = pytest.importorskip("akshare", reason="akshare 未安装（成分股接线测试需要）")
 
     monkeypatch.setattr(ak, "index_stock_cons_csindex",
                         lambda symbol="000300": pd.DataFrame({"成分券代码": sorted(CONS_NOW)}))
@@ -179,7 +179,7 @@ def test_real_asof_nonempty_after_refresh(tmp_path, fake_cons):
 # ── 接口接线（双源降级 + 清洗） ─────────────────────────
 
 def test_fetch_constituents_primary(monkeypatch):
-    import akshare as ak
+    ak = pytest.importorskip("akshare", reason="akshare 未安装（成分股接线测试需要）")
 
     monkeypatch.setattr(ak, "index_stock_cons_csindex",
                         lambda symbol="000300": pd.DataFrame(
@@ -191,7 +191,7 @@ def test_fetch_constituents_primary(monkeypatch):
 
 
 def test_fetch_constituents_fallback_and_clean(monkeypatch):
-    import akshare as ak
+    ak = pytest.importorskip("akshare", reason="akshare 未安装（成分股接线测试需要）")
 
     def _boom(symbol="000300"):
         raise RuntimeError("官网接口不可用")
@@ -203,7 +203,7 @@ def test_fetch_constituents_fallback_and_clean(monkeypatch):
 
 
 def test_fetch_constituents_double_failure(monkeypatch):
-    import akshare as ak
+    ak = pytest.importorskip("akshare", reason="akshare 未安装（成分股接线测试需要）")
 
     def _boom(symbol="000300"):
         raise RuntimeError("down")

@@ -135,7 +135,7 @@ def test_fetch_parses_columns(monkeypatch):
 
 
 def test_fetch_failure_raises_runtimeerror(monkeypatch):
-    import akshare
+    akshare = pytest.importorskip("akshare", reason="akshare 未安装（行业接口测试需要）")
 
     def _boom():
         raise ConnectionError("remote disconnected")
