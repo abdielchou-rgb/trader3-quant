@@ -129,3 +129,25 @@ def test_backup_disabled_by_default_no_network(ds, cal_path, monkeypatch):
     assert res["synced"] == 0
     assert res["source"] is None
     assert not cal_path.exists()
+
+
+def test_akshare_missing_module_still_importable_and_degrades(ds, cal_path, monkeypatch, caplog):
+    """akshare 未安装时：模块可导入（本测试得以收集即证明），
+    sync 诚实降级 synced=0 且日志说明缺源，而非 AttributeError 崩溃。
+
+    零联网：主源被 monkeypatch 为不可调用（模拟 akshare 缺接口/缺库），
+    备源开关默认关闭 → 不触网。
+    """
+    import trader3.v2.disclosure_sync as mod
+
+    assert hasattr(mod, "ak")  # 延迟导入占位对象存在
+    monkeypatch.delattr(ds.ak, "stock_yysj_em", raising=False)
+    monkeypatch.delenv("TRADER3_DISCLOSURE_BACKUP", raising=False)
+
+    with caplog.at_level(logging.INFO, logger="trader3.v2.disclosure_sync"):
+        res = mod.sync_disclosure_dates("2026-06-30")
+    assert res["synced"] == 0
+    assert res["source"] is None
+    assert not cal_path.exists()
+    infos = [r.getMessage() for r in caplog.records]
+    assert any(("不可用" in m) or ("未启用" in m) for m in infos), infos

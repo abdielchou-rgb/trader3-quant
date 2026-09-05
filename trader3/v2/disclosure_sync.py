@@ -31,11 +31,18 @@ import os
 import tempfile
 from collections.abc import Iterable
 from pathlib import Path
+from types import SimpleNamespace
 
-import akshare as ak
 import pandas as pd
 
 logger = logging.getLogger(__name__)
+
+# akshare 为可选重依赖：延迟导入，缺失时 sync 诚实降级（synced=0 + 缺失日志）。
+# 测试通过 monkeypatch 本属性模拟主/备源行为，不再要求安装 akshare。
+try:
+    import akshare as ak
+except ImportError:  # pragma: no cover - 环境差异路径
+    ak = SimpleNamespace(__name__="akshare-missing", _missing=True)  # type: ignore[assignment]
 
 # 测试可通过环境变量重定向存储路径
 _PATH_ENV = "TRADER3_DISCLOSURE_CALENDAR"
@@ -135,8 +142,11 @@ def _backup_enabled() -> bool:
 
 
 def _fetch_primary(q: str) -> pd.DataFrame:
-    """主源：东财预约披露时间表（失败时抛出，由调用方降级）"""
-    return ak.stock_yysj_em(symbol="沪深A股", date=q.replace("-", ""))
+    """主源：东财预约披露时间表（akshare 缺失/失败时抛出，由调用方降级）"""
+    fetcher = getattr(ak, _PRIMARY, None)
+    if not callable(fetcher):
+        raise RuntimeError(f"akshare 不可用或缺 {_PRIMARY} 接口")
+    return fetcher(symbol="沪深A股", date=q.replace("-", ""))
 
 
 def _fetch_cninfo_backup(q: str) -> pd.DataFrame | None:
