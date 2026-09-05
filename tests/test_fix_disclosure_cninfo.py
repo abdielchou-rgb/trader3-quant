@@ -51,7 +51,7 @@ def test_primary_fails_cninfo_backup_succeeds(ds, cal_path, monkeypatch):
     def boom(**kw):
         raise RuntimeError("em down")
 
-    monkeypatch.setattr(ds.ak, "stock_yysj_em", boom)
+    monkeypatch.setattr(ds.ak, "stock_yysj_em", boom, raising=False)
 
     captured: dict = {}
 
@@ -59,7 +59,7 @@ def test_primary_fails_cninfo_backup_succeeds(ds, cal_path, monkeypatch):
         captured.update(kw)
         return _cninfo_df()
 
-    monkeypatch.setattr(ds.ak, "stock_report_disclosure", fake_cninfo)
+    monkeypatch.setattr(ds.ak, "stock_report_disclosure", fake_cninfo, raising=False)
 
     res = ds.sync_disclosure_dates("2026-06-30")
     assert res["synced"] == 2
@@ -81,8 +81,8 @@ def test_both_sources_fail_zero_no_raise(ds, cal_path, monkeypatch, caplog):
     def boom(**kw):
         raise RuntimeError("all down")
 
-    monkeypatch.setattr(ds.ak, "stock_yysj_em", boom)
-    monkeypatch.setattr(ds.ak, "stock_report_disclosure", boom)
+    monkeypatch.setattr(ds.ak, "stock_yysj_em", boom, raising=False)
+    monkeypatch.setattr(ds.ak, "stock_report_disclosure", boom, raising=False)
 
     with caplog.at_level(logging.INFO, logger="trader3.v2.disclosure_sync"):
         res = ds.sync_disclosure_dates("2026-06-30")
@@ -100,7 +100,7 @@ def test_backup_interface_missing_degrades(ds, cal_path, monkeypatch, caplog):
     def boom(**kw):
         raise RuntimeError("em down")
 
-    monkeypatch.setattr(ds.ak, "stock_yysj_em", boom)
+    monkeypatch.setattr(ds.ak, "stock_yysj_em", boom, raising=False)
     monkeypatch.delattr(ds.ak, "stock_report_disclosure", raising=False)
 
     with caplog.at_level(logging.INFO, logger="trader3.v2.disclosure_sync"):
@@ -122,8 +122,8 @@ def test_backup_disabled_by_default_no_network(ds, cal_path, monkeypatch):
         raise AssertionError("备源默认关闭，不应联网调用")
 
     monkeypatch.delenv("TRADER3_DISCLOSURE_BACKUP", raising=False)
-    monkeypatch.setattr(ds.ak, "stock_yysj_em", boom)
-    monkeypatch.setattr(ds.ak, "stock_report_disclosure", must_not_call)
+    monkeypatch.setattr(ds.ak, "stock_yysj_em", boom, raising=False)
+    monkeypatch.setattr(ds.ak, "stock_report_disclosure", must_not_call, raising=False)
 
     res = ds.sync_disclosure_dates("2026-06-30")
     assert res["synced"] == 0
