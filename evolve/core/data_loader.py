@@ -63,7 +63,7 @@ def load_qlib_panel(
     fields = ["open", "high", "low", "close", "volume", "vwap", "amount"]
     panel = {f: np.full((T, len(closes)), np.nan, dtype=np.float64) for f in fields}
 
-    for j, (code, (_vals, dates)) in enumerate(closes.items()):
+    for j, (code, _closes_item) in enumerate(closes.items()):  # noqa: B007
         for f in fields:
             try:
                 fvals, fdates = dp.load_stock(code.lower(), f, start, end)
@@ -132,7 +132,7 @@ def load_etf_panel(
     fields = ["open", "high", "low", "close", "volume"]
     panel = {f: np.full((T, N), np.nan, dtype=np.float64) for f in fields}
 
-    for df in frames.values():
+    for j, df in enumerate(frames.values()):
         df = df.reindex(dates)
         for f in fields:
             if f in df.columns:

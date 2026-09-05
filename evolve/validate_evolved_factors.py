@@ -156,7 +156,8 @@ def main():
     else:
         factors = load_factors(_ROOT / args.json)
         if not factors:
-            print("no factors in", args.json); return
+            print("no factors in", args.json)
+            return
         names = [f"F{i+1}" for i in range(len(factors))]
 
     print("=" * 78)

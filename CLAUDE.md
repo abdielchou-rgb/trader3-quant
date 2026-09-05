@@ -1,7 +1,7 @@
 # 3号交易员 — Agent 行为约束
 
 > 约束你（Agent）在 **3号交易员 (trader3)** 项目中的行为。核心：**量化工程方法论** + **数据纪律**。
-> 本文件反映 2026-09 全量推进后的真实状态（514 tests 基线）。
+> 本文件反映 2026-09 机构级工程瓶颈攻坚后的真实状态（545 tests 基线）。
 
 ---
 
@@ -22,7 +22,7 @@ evolve/             # GP 因子工厂（fwd 已修正为前向收益；训练≤
 config/             # 策略/约束 YAML
 scripts/            # update_market_data.py（qlib_bin 增量管线）等
 shared_state/       # 原子写共享状态 + paper/（纸面账户）+ _quarantine_pre_audit/
-tests/              # 516 个测试（514 passed / 2 skipped 基线）；testpaths 已在 pyproject 隔离
+tests/              # 547 个测试（545 passed / 2 skipped 基线）；testpaths 已在 pyproject 隔离
 ```
 
 ## 数据源（重要）
@@ -76,7 +76,7 @@ Standards 轴（风格）与 Spec 轴（需求）分开报告。
 1. **数据必须带来源** — 真实/合成标注清楚，禁止编造；伪造指标（如硬编码 PE/融资余额）一律删除
 2. **门禁必须过** — gates_passed=false 的产出要说明原因，下游不得静默采纳
 3. **量化输出是候选信号，非投资建议**
-4. **测试必须绿** — 当前基线 514 passed / 2 skipped
+4. **测试必须绿** — 当前基线 545 passed / 2 skipped
 
 ---
 
@@ -133,3 +133,13 @@ uvicorn trader3.api.server:app --host 127.0.0.1 --port 8000
 - **深度模型（2026-09 全量推进）**：`evolve/core/deep_model.py` LSTM 打分器（torch 2.13 CPU，无前视/确定性/截尾一致性测试覆盖）；
   `run_evolution.py --deep` 把 LSTM 候选并入 GP 候选同一筛选门禁（真实 csi300 数据冒烟通过：backend=torch，IC 由 StrategySelector 判定）；
   torch 缺失时确定性 numpy ridge 回退（显式打标 fallback_used，禁标 LSTM）
+- **机构级工程层（2026-09 瓶颈攻坚，全部 TDD）**：
+  - **PIT 双时间戳**（`trader3/data/pit_loader.py`）：financial_pit 表 report_date+publish_timestamp 双列，
+    asof 检索严格按披露时刻切片（7 测试：年报 4/30 边界、更正公告、法定截止保守回填）；旧库无公告日时按法定最晚日回填（保守：宁可晚可见不可穿越）
+  - **GP 正交残差化**（`evolve/core/orthogonal_fitness.py`）：P_orth 预计算投影剥离 Barra 风格共线，
+    残差 Rank-IC 为边际增量 Alpha（6 测试：纯风格克隆杀、增量 Alpha 留、独立因子不误伤）；
+    StrategySelector 新增可选 orthogonality 门禁（注入 barra_styles+forward_returns 即激活）
+  - **订单状态机+WAL**（`trader3/v2/live/order_state.py` + `robust_qmt_executor.py`）：9 态白名单转移、
+    终态吸收幂等、先日志后动作 fsync、断线对账（远程事实收敛/幽灵单 FAILED_LOST 隔离）（8 测试）
+  - **多日参与率执行**（`trader3/tools/execution_flow.py`）：5% 参与率上限顺延、AC 非线性冲击方向感知、
+    整手约束、流动性不足诚实报 unfilled（9 测试）

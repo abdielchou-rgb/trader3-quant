@@ -33,6 +33,7 @@ class StrategySelector:
       4. 多空年化 > 0.10         （可交易性门槛，年化多空差 > 10%）
       5. 表达式复杂度 < 25 节点   （可解释性门槛）
       6. 去重（与已选策略的表达式相似度）
+      7. 正交性（可选）：注入 Barra 风格暴露后，残差 IC 不足 → 判共线拒绝
 
     综合评分 = 0.4*ICIR + 0.3*单调性 + 0.3*多空年化
     """
@@ -44,6 +45,9 @@ class StrategySelector:
         monotonicity_min: float = 0.4,
         long_short_min: float = 0.10,
         max_nodes: int = 25,
+        barra_styles: np.ndarray | None = None,
+        forward_returns: np.ndarray | None = None,
+        orth_ic_min: float = 0.01,
     ):
         self.ic_min = ic_min
         self.icir_min = icir_min
@@ -52,6 +56,13 @@ class StrategySelector:
         self.max_nodes = max_nodes
         self._selected_exprs: list[str] = []
         self._selected_values: list[np.ndarray] = []
+        # ── 正交残差化（多重共线拦截，P2-2）──
+        self._orth_eval = None
+        self._fwd = forward_returns
+        self.orth_ic_min = orth_ic_min
+        if barra_styles is not None:
+            from core.orthogonal_fitness import OrthogonalFitnessEvaluator
+            self._orth_eval = OrthogonalFitnessEvaluator(barra_styles)
 
     def select(self, candidates: list[dict]) -> list[SelectionResult]:
         """
@@ -103,6 +114,19 @@ class StrategySelector:
         else:
             dup = any(_expr_similarity(expr, s) > 0.7 for s in self._selected_exprs)
             gates["uniqueness"] = {"passed": not dup, "value": 1 if not dup else 0}
+
+        # 正交性门禁（可选）：风格暴露注入时，残差 IC 不足 → 共线拒绝
+        if self._orth_eval is not None and values is not None and self._fwd is not None:
+            try:
+                orth_ic = self._orth_eval.evaluate_orthogonal_ic(
+                    np.asarray(values, dtype=np.float64).ravel(), self._fwd
+                )
+                gates["orthogonality"] = {
+                    "passed": abs(orth_ic) >= self.orth_ic_min,
+                    "value": round(orth_ic, 4),
+                }
+            except Exception:  # noqa: BLE001 — 形状不齐等评估失败 → 保守跳过该门禁
+                gates["orthogonality"] = {"passed": True, "value": "n/a (eval skipped)"}
 
         passed = all(g["passed"] for g in gates.values())
 
