@@ -1,0 +1,19 @@
+# 构建上下文瘦身（数据/运行态/工具链缓存一律不进镜像）
+.git
+.github
+.venv
+**/__pycache__
+**/*.pyc
+.pytest_cache
+.mypy_cache
+.ruff_cache
+.coverage
+data/
+shared_state/
+docs/
+tests/
+temp/
+*.md
+!README.md
+Dockerfile
+docker-compose.yml

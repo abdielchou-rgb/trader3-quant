@@ -1,0 +1,44 @@
+# trader3-quant 生产编排
+# 用法：docker compose up -d
+# 数据挂载：把本机 qlib_bin / financials 挂到 /data（见 x-data 卷）
+services:
+  api:
+    build: .
+    image: trader3-quant:latest
+    container_name: t3-api
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8000:8000"   # 只绑本机；远程访问请前置反代+TLS
+    environment:
+      TRADER3_API_KEY: ${TRADER3_API_KEY:-}
+      T3_QLIB_DATA_DIR: /data/qlib_bin
+      T3_FINANCIALS_DB: /data/financials.db
+    volumes:
+      - t3-data:/data
+      - t3-state:/app/shared_state   # WAL/纸面账持久化
+    deploy:
+      resources:
+        limits:
+          memory: 2g
+
+  # 每日例行（行情增量 + 进化 + 影子对账）—— 非长驻，跑完退出
+  daily-routine:
+    image: trader3-quant:latest
+    container_name: t3-daily
+    profiles: ["batch"]           # 手动触发：docker compose --profile batch run daily-routine
+    entrypoint: ["python", "tools/daily_routine.py", "--skip-etf-data"]
+    environment:
+      T3_QLIB_DATA_DIR: /data/qlib_bin
+      QMT_PATH: ${QMT_PATH:-}
+      QMT_ACCOUNT: ${QMT_ACCOUNT:-}
+    volumes:
+      - t3-data:/data
+      - t3-state:/app/shared_state
+    depends_on:
+      - api
+
+volumes:
+  t3-data:
+    external: false
+  t3-state:
+    external: false

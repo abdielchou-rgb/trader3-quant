@@ -79,4 +79,11 @@ files = [
     "trader3/v2/live/order_state.py",
     "trader3/v2/live/robust_qmt_executor.py",
     "trader3/tools/execution_flow.py",
+    "trader3/runtime/events.py",
+    "trader3/runtime/strategy.py",
+    "trader3/runtime/replay.py",
+    "trader3/runtime/live_rt.py",
+    "trader3/risk/gateway.py",
+    "trader3/risk/drift_halt.py",
+    "trader3/obs/metrics.py",
 ]

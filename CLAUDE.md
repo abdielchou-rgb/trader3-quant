@@ -22,7 +22,7 @@ evolve/             # GP 因子工厂（fwd 已修正为前向收益；训练≤
 config/             # 策略/约束 YAML
 scripts/            # update_market_data.py（qlib_bin 增量管线）等
 shared_state/       # 原子写共享状态 + paper/（纸面账户）+ _quarantine_pre_audit/
-tests/              # 557 个测试（555 passed / 2 skipped 基线）；testpaths 已在 pyproject 隔离
+tests/              # 579 个测试（577 passed / 2 skipped 基线）；testpaths 已在 pyproject 隔离
 ```
 
 ## 数据源（重要）
@@ -76,7 +76,7 @@ Standards 轴（风格）与 Spec 轴（需求）分开报告。
 1. **数据必须带来源** — 真实/合成标注清楚，禁止编造；伪造指标（如硬编码 PE/融资余额）一律删除
 2. **门禁必须过** — gates_passed=false 的产出要说明原因，下游不得静默采纳
 3. **量化输出是候选信号，非投资建议**
-4. **测试必须绿** — 当前基线 555 passed / 2 skipped
+4. **测试必须绿** — 当前基线 577 passed / 2 skipped
 
 ---
 
@@ -152,3 +152,19 @@ uvicorn trader3.api.server:app --host 127.0.0.1 --port 8000
     崩溃重放/整手拒绝不落盘/对账收敛全部回归覆盖（tests/test_qmt_wal_wiring.py）
   - **WFA 参与率约束已接**：`_run_wfa_rolling(daily_volumes=panel["amount"], capital=...)`
     ——首日调仓超 5% 日成交额部分按现金截断（保守下界）+ 成本照提；无 amount 面板时历史行为不变
+- **生产级架构层（2026-09 六维推进，双模同构+硬风控+可观测，全部 TDD）**：
+  - **统一事件模型**（`trader3/runtime/events.py`）：Bar/Tick/Signal/OrderIntent/Fill 不可变 dataclass；
+    Fill 双时间戳（exchange_ts/local_ts）
+  - **双模同构运行时**（`trader3/runtime/`）：DualModeStrategy 只面向事件+快照零 SDK 依赖；
+    ReplayRuntime（历史流+TimestampGuard 前视守卫，未来事件拒消费）与 LiveRuntime（网关回调）
+    驱动同一份策略代码 —— Train-Serving Skew 结构性根治
+  - **前置硬风控网关**（`trader3/risk/gateway.py`）：单笔限额/集中度（增量口径）/自成交/OTR 熔断/
+    回撤 KillSwitch/急停按钮/幂等单号（DUPLICATE_ID）+ 确定性单号生成器（日+策略+序列可复现）
+  - **持仓漂移挂起**（`trader3/risk/drift_halt.py`）：对账差异达阈值 → 自动挂起开仓（平仓放行），
+    resolve() 人工解除
+  - **可观测性**（`trader3/obs/metrics.py`）：Prometheus 文本格式零依赖实现（Counter/Gauge/Histogram），
+    API `/metrics` 端点已挂
+  - **容器化**（`Dockerfile` 多阶段 + `docker-compose.yml`）：非 root 运行、api 长驻 +
+    daily-routine 批处理分容器、/data 与 shared_state 卷持久化
+  - **有意不做**（诚实边界）：Level-2 ring buffer/ZeroMQ/Rust 扩展是 tick 级 HFT 设施，
+    本引擎日频 A股口径下属过度设计；需要时再评估
