@@ -26,6 +26,7 @@ from trader3.v2.live.broker_base import (
     BrokerBase,
     MarketData,
     Order,
+    OrderSide,
     OrderStatus,
     OrderType,
     Position,
@@ -79,15 +80,66 @@ def _xtquant_missing() -> ImportError:
 
 
 class QMTBroker(BrokerBase):
-    """miniQMT 经纪商（异步接口经 asyncio.to_thread 桥接同步 xttrader SDK）。"""
+    """miniQMT 经纪商（异步接口经 asyncio.to_thread 桥接同步 xttrader SDK）。
 
-    def __init__(self, config: QMTConfig, simulated: bool = False):
+    wal_path 注入时启用 WAL 加固路径（RobustQMTExecutor）：
+    下单先落盘后发送、崩溃可重放、对账收敛（见 robust_qmt_executor.py）。
+    """
+
+    def __init__(self, config: QMTConfig, simulated: bool = False,
+                 wal_path: str | None = None):
         super().__init__(config=vars(config) if config else {})
         self.cfg = config
         self.simulated = simulated
         self._trader: Any = None
         self._xtdata: Any = None
         self._sim_prices: dict[str, float] = {"600519.SH": 1500.0, "000001.SZ": 11.0}
+        # WAL 加固层（可选）：机构级断线对账（P3）
+        self.wal_executor = None
+        if wal_path:
+            from trader3.v2.live.robust_qmt_executor import RobustQMTExecutor
+
+            self.wal_executor = RobustQMTExecutor(wal_path, self._wal_gateway())
+
+    # ── WAL 网关桥（同步接口，供 RobustQMTExecutor 调用）──────────
+
+    def _wal_gateway(self):
+        """把 broker 的撮合/查询适配成 WAL 执行器需要的同步接口。
+
+        同步实现（不经 asyncio.run）：SIM 撮合与订单簿查询本身无 IO 阻塞；
+        真实 xtquant 路径下 RobustQMTExecutor 在 asyncio.to_thread 中调用，
+        亦不会与主事件循环竞争。
+        """
+
+        class _Gateway:
+            def __init__(gw_self):
+                gw_self.broker = self
+
+            def order_stock(gw_self, symbol, amount, price):
+                o = Order(symbol=symbol, side=OrderSide.BUY, quantity=amount,
+                          order_type=OrderType.LIMIT, price=price)
+                # 同步直撮（复用 SIM/真实路径的核心逻辑，不经 async 调度）
+                res = gw_self.broker._fill_sync(o)
+                if res.status in (OrderStatus.FILLED, OrderStatus.SUBMITTED):
+                    return res.broker_order_id
+                raise ConnectionError(
+                    f"gateway rejected: {res.metadata.get('reject_reason', res.status)}"
+                )
+
+            def query_stock_orders(gw_self):
+                out = {}
+                for o in gw_self.broker._orders.values():
+                    if o.broker_order_id and o.status in (
+                        OrderStatus.FILLED, OrderStatus.PARTIAL,
+                        OrderStatus.CANCELLED, OrderStatus.REJECTED,
+                    ):
+                        out[o.broker_order_id] = {
+                            "status": o.status.value.upper(),
+                            "filled": o.filled_qty,
+                        }
+                return out
+
+        return _Gateway()
 
     # ── 连接 ──────────────────────────────────────
 
@@ -138,6 +190,34 @@ class QMTBroker(BrokerBase):
         return int(math.floor(qty / LOT_SIZE) * LOT_SIZE)
 
     async def place_order(self, order: Order) -> Order:
+        """下单入口：WAL 加固启用时走 RobustQMTExecutor（先落盘后发送）。"""
+        if self.wal_executor is not None:
+            rounded = self._round_lot(order.quantity)
+            if rounded < LOT_SIZE:
+                order.status = OrderStatus.REJECTED
+                order.metadata["reject_reason"] = (
+                    f"A股整手约束: {order.quantity} 股不足一手（{LOT_SIZE}）")
+                self._update_order(order)
+                return order
+            order.quantity = rounded
+            px = float(order.price or self._sim_prices.get(order.symbol, 10.0))
+            await asyncio.to_thread(
+                self.wal_executor.submit_safe_order,
+                order.client_order_id, order.symbol, rounded, px,
+            )
+            wal_entry = self.wal_executor.active_orders.get(order.client_order_id)
+            if wal_entry:
+                order.status = OrderStatus[wal_entry["state"]] \
+                    if wal_entry["state"] in OrderStatus.__members__ else order.status
+                order.broker_order_id = wal_entry.get("broker_order_id")
+                if "error" in wal_entry:
+                    order.metadata["reject_reason"] = wal_entry["error"]
+            self._update_order(order)
+            return order
+        return await self.place_order_direct(order)
+
+    async def place_order_direct(self, order: Order) -> Order:
+        """原始下单路径（无 WAL 层，历史行为保持）。"""
         rounded = self._round_lot(order.quantity)
         if rounded < LOT_SIZE:
             order.status = OrderStatus.REJECTED
@@ -149,19 +229,7 @@ class QMTBroker(BrokerBase):
             order.quantity = rounded
 
         if self.simulated or self._trader is None:
-            # SIM 撮合：限价按委托价、市价按内部价目，必成交（联调路径）
-            price: float = (
-                float(order.price or 0.0) if order.order_type == OrderType.LIMIT
-                else self._sim_prices.get(order.symbol, 10.0)
-            )
-            order.status = OrderStatus.FILLED
-            order.filled_qty = order.quantity
-            order.avg_fill_price = float(price)
-            order.broker_order_id = f"QMTSIM-{order.client_order_id[:8]}"
-            order.metadata["simulated"] = True
-            order.metadata["broker"] = "QMT-SIM"
-            self._update_order(order)
-            return order
+            return self._fill_sim(order)
 
         from xtquant.xttype import StockOrder
 
@@ -193,6 +261,24 @@ class QMTBroker(BrokerBase):
             order.broker_order_id = str(seq)
         self._update_order(order)
         return order
+
+    def _fill_sim(self, order: Order) -> Order:
+        """SIM 撮合（同步核心）：限价按委托价、市价按内部价目，必成交。"""
+        price: float = (
+            float(order.price or 0.0) if order.order_type == OrderType.LIMIT
+            else self._sim_prices.get(order.symbol, 10.0)
+        )
+        order.status = OrderStatus.FILLED
+        order.filled_qty = order.quantity
+        order.avg_fill_price = float(price)
+        order.broker_order_id = f"QMTSIM-{order.client_order_id[:8]}"
+        order.metadata["simulated"] = True
+        order.metadata["broker"] = "QMT-SIM"
+        self._update_order(order)
+        return order
+
+    # _fill_sync 是 _fill_sim 的别名（WAL 网关桥调用口径）
+    _fill_sync = _fill_sim
 
     async def cancel_order(self, client_order_id: str) -> bool:
         order = self._orders.get(client_order_id)

@@ -44,6 +44,7 @@ data/watchlist_demo.db
 data/qc_report.json
 data/disclosure_calendar.json
 data/permission_test.txt
+data/financials_pit.db
 
 # 编辑器
 .vscode/

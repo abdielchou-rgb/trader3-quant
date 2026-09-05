@@ -63,6 +63,8 @@ def main():
     parser.add_argument("--deep", action="store_true",
                         help="追加 LSTM 深度打分器候选（torch 优先，缺失时 numpy 回退）")
     parser.add_argument("--deep-epochs", type=int, default=300, help="LSTM 训练轮数")
+    parser.add_argument("--orthogonal", action="store_true",
+                        help="启用正交残差化门禁（Barra 风格剥离，拒绝共线因子）")
     parser.add_argument("--top-k", type=int, default=5, help="最终筛选 Top-K")
     args = parser.parse_args()
 
@@ -177,7 +179,13 @@ def main():
         )
 
     # ── 筛选 ──
-    selector = StrategySelector()
+    if args.orthogonal:
+        from core.style_exposures import make_orthogonal_selector
+
+        selector = make_orthogonal_selector(panel, fwd)
+        logger.info("正交门禁已启用：Barra 风格暴露 [mom20/size/vol20] 残差化")
+    else:
+        selector = StrategySelector()
     selected = selector.select_best(candidates, top_k=args.top_k)
 
     strategies_dir = _ROOT / "evolve" / "strategies"

@@ -1419,6 +1419,40 @@ def _load_wfa_panel(dp: Any) -> tuple[list[str], np.ndarray, np.ndarray, np.ndar
     return codes_list, close_matrix, returns_matrix, valid_flags, time_axis
 
 
+def _apply_participation_cap(
+    effective: np.ndarray,
+    daily_amounts_row: np.ndarray,
+    capital: float,
+    max_rate: float,
+) -> tuple[np.ndarray, float, float]:
+    """WFA 多日参与率约束（P4）：首日容量截断 + 超额按现金（保守下界）。
+
+    金额口径（无需价格面板）：单股日可成交金额 = amount_i × max_rate。
+    目标权重即金额占比（turnover_i = capital × target_w_i），故
+        cap_w_i = min(target_w_i, amount_i × max_rate / capital)
+    不足部分（deferred）按现金处理（收益 0）——保守下界：真实多日执行
+    会逐步追上仓位并暴露顺延日漂移；本实现显式给出"容量不足 → 敞口缩水"
+    的影响方向与幅度下界，deferred 部分照常计提换手成本。
+
+    Returns
+    -------
+    (effective_adapted, cash_weight, deferred_delta)
+    """
+    target = np.abs(np.asarray(effective, dtype=np.float64))
+    if capital <= 0:
+        return effective, max(0.0, 1.0 - float(np.sum(target))), 0.0
+    amt = np.asarray(daily_amounts_row, dtype=np.float64)
+    with np.errstate(invalid="ignore"):
+        cap_amount = np.where(amt > 0, amt * max_rate, 0.0)
+        cap_w = cap_amount / capital
+    adapted = np.minimum(target, cap_w)
+
+    deferred_delta = float(np.sum(target) - np.sum(adapted))
+    total_eff = float(np.sum(adapted))
+    cash_weight = max(0.0, 1.0 - total_eff)
+    return adapted, cash_weight, deferred_delta
+
+
 def _run_wfa_rolling(
     stock_returns: np.ndarray,
     factor_scores: np.ndarray,
@@ -1427,6 +1461,9 @@ def _run_wfa_rolling(
     step: int,
     codes: list[str] | None = None,
     commission: CommissionInfo | None = None,
+    daily_volumes: np.ndarray | None = None,
+    capital: float = 1_000_000.0,
+    max_participation_rate: float = 0.05,
 ) -> tuple[list[dict], list[float], list[float], list[float], list[float],
            list[np.ndarray], np.ndarray]:
     """
@@ -1444,11 +1481,21 @@ def _run_wfa_rolling(
     - 段内不调仓，持仓权重保持首日实际成交结果至窗口结束；
     - 被涨停拦截未建仓的资金按现金处理（收益 0），不参与段内收益。
 
+    多日参与率约束（P4）：
+    - daily_volumes 提供时（语义为**日成交额面板** amount， qlib 真实路径
+      可直接传 panel["amount"]），首日调仓按 max_participation_rate（默认 5%）
+      约束：单股日可成交金额 = amount × rate；目标金额（capital × 权重）超限
+      部分按现金处理（敞口缩水，保守下界），顺延部分照常计提换手成本。
+    - daily_volumes=None → 历史行为（首日一次性全额成交）。
+
     Parameters
     ----------
     codes : 可选，与 stock_returns 列一一对应；提供时涨跌停幅度逐股按板块判定，
             否则统一主板 DEFAULT_PRICE_LIMIT。
     commission : 可选费用模型；None 用 DEFAULT_COSTS。
+    daily_volumes : 可选 (T, N) 日成交额面板（qlib 真实路径传 panel["amount"]；
+                    语义为金额而非股数，参与率在金额口径下自洽）。
+    capital : 参与率换算用的名义资金（目标权重 → 股数）。
 
     Returns
     -------
@@ -1510,6 +1557,13 @@ def _run_wfa_rolling(
         )
         executed_delta = float(np.sum(np.abs(effective)))  # 空仓建仓：|eff - 0|
         day0_cost = cm.turnover_cost(executed_delta)
+
+        # 多日参与率约束（P4）：首日金额容量不足 → 敞口截断 + 超额按现金
+        if daily_volumes is not None:
+            effective, cash_weight, deferred = _apply_participation_cap(
+                effective, daily_volumes[oos_start], capital, max_participation_rate,
+            )
+            day0_cost += cm.turnover_cost(deferred)  # 顺延部分同样计成本
 
         # OOS 表现（首日实际成交权重持有全段；首日扣建仓成本，现金收益按 0 计）
         oos_rets = stock_returns[oos_slice] @ effective
