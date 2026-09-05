@@ -31,6 +31,7 @@ logger = logging.getLogger("trader3.v2.quant_pipeline")
 @dataclass
 class QuantPipelineConfig:
     factor_exprs: dict[str, str] = field(default_factory=dict)  # name -> DSL expr
+    use_default_factors: bool = True     # 无任何因子来源时启用内置标准因子集（开箱可跑）
     method: str = "ic_weighted"
     top_n: int = 0
     max_single: float = 0.25
@@ -64,6 +65,15 @@ class QuantPipelineConfig:
     child_method: str = "twap"              # twap | vwap
     child_slices: int = 10
     child_horizon: float = 60.0             # 执行跨度（秒，回测可缩放为 0）
+
+
+# 内置标准因子集：无注册仓库、无显式 factor_exprs 时的开箱默认（经典量价组合）
+DEFAULT_FACTOR_EXPRS: dict[str, str] = {
+    "mom_20": "sub(close, delay(close, 20))",
+    "mom_5": "sub(close, delay(close, 5))",
+    "vol_20": "ts_std(close, 20)",
+    "turn_chg": "sub(volume, delay(volume, 5))",
+}
 
 
 # regime 标签 -> (方法, gross 敞口系数)
@@ -217,6 +227,10 @@ async def run_quant_pipeline(
                 logger.info("[quant_pipeline] 并入因子工厂仓库 %d 个因子", len(mined))
         except Exception as e:  # noqa: BLE001
             logger.warning("[quant_pipeline] 读取因子仓库失败: %s", e)
+    # 无任何因子来源时回退内置标准因子集（开箱可跑；显式传空因子想禁用则关 use_default_factors）
+    if not factor_exprs and cfg.use_default_factors:
+        factor_exprs = dict(DEFAULT_FACTOR_EXPRS)
+        logger.info("[quant_pipeline] 无因子来源，使用内置标准因子集 %d 个", len(factor_exprs))
 
     # 1. 得分（因子 → ensemble）
     if scores is None and build_scores is not None:
