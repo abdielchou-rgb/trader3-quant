@@ -8,11 +8,16 @@ pyyaml>=6.0
 hmmlearn>=0.3
 scikit-learn>=1.3
 
-# HTTP client for broker adapters (tiger_broker)
+# HTTP client for broker adapters (tiger_broker) & notify channel
 aiohttp>=3.9
+requests>=2.31
 
 # Deep scorer backend (evolve/core/deep_model.py; missing → flagged numpy fallback)
 torch>=2.0
+
+# API server + payload tests (skipped gracefully when absent)
+fastapi>=0.100
+httpx>=0.24
 
 # Test toolchain
 pytest>=7.0
