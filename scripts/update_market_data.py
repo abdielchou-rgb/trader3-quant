@@ -413,12 +413,14 @@ def fetch_constituents(universe: str = "csi300") -> set[str]:
     接口实测（akshare 1.18.81）：
       index_stock_cons_csindex(symbol="000300") → 列含 "成分券代码"（裸 6 位码）
       index_stock_cons(symbol="000300")         → 列含 "品种代码"
-    """
-    import akshare as ak
 
+    universe 校验前置于 akshare 导入：参数错误不依赖可选数据源是否安装。
+    """
     symbol = _UNIVERSE_SYMBOL.get(universe)
     if not symbol:
         raise ValueError(f"未支持的 universe: {universe}")
+    import akshare as ak
+
     try:
         df = ak.index_stock_cons_csindex(symbol=symbol)
         codes = {str(c).strip().zfill(6) for c in df["成分券代码"]}
