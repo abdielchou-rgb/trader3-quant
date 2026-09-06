@@ -26,6 +26,9 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
           pip install numpy scipy pandas pytest pytest-cov pytest-asyncio ruff mypy
+          python -c "import numpy; print('numpy', numpy.__version__)"
+          python -c "import scipy; print('scipy', scipy.__version__)"
+          python -c "import pandas; print('pandas', pandas.__version__)"
 
       - name: Run ruff linting
         run: ruff check .
