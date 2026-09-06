@@ -17,8 +17,8 @@
 trader3/            # 核心包（10 个 Tool，全部经 IronGate）
   tools/            #   signal / valuation / backtest / optimize / execution
   v2/               # 新版子系统：事件采集/自选股/触发/风控链/纸面交易/comps TTM
-  research/         # 研究层（R1-R4）：experiment(实验档案)/labeling(三重屏障+meta)/
-                    #   rigor(PSR/DSR/MTRL)/sample_weights(唯一性权重)
+  research/         # 研究层（R1-R5）：experiment(实验档案)/labeling(三重屏障+meta)/
+                    #   rigor(PSR/DSR/MTRL)/sample_weights(唯一性权重)/factor_library(Alpha158骨架)
   runtime/          # 双模同构运行时（replay+live+events+strategy）
   risk/             # 前置硬风控（gateway/drift_halt）
   api/              # FastAPI（X-API-Key 鉴权）
@@ -27,7 +27,7 @@ docs/quant-knowledge/  # 全景认知库：qlib/mlfinlab/框架对比/因子论�
 config/             # 策略/约束 YAML
 scripts/            # update_market_data.py（qlib_bin 增量管线）等
 shared_state/       # 原子写共享状态 + paper/（纸面账户）+ _quarantine_pre_audit/
-tests/              # 628 个测试（626 passed / 2 skipped 基线）；testpaths 已在 pyproject 隔离
+tests/              # 633 个测试（631 passed / 2 skipped 基线）；testpaths 已在 pyproject 隔离
 ```
 
 ## 数据源（重要）
@@ -66,6 +66,9 @@ tests/              # 628 个测试（626 passed / 2 skipped 基线）；testpat
   （run_evolution --dsr；n_trials=gen×pop×2 诚实上报）
 - **候选契约**：candidates 须带 values + ic_series（compute_ic_series 逐期 Rank-IC），
   否则对应门禁自动跳过（向后兼容）
+- **Alpha158 骨架因子库**（trader3/research/factor_library.py）：6 族 24 因子
+  （K线形态/趋势ROC·MA·RSV/波动/价量相关/RSI/量能），无前视（截尾一致性测试），
+  真实 csi300 冒烟 24 run 已入 experiment 档案
 
 ## 代码工程方法论（改 trader3 代码时）
 
@@ -91,7 +94,7 @@ Standards 轴（风格）与 Spec 轴（需求）分开报告。
 1. **数据必须带来源** — 真实/合成标注清楚，禁止编造；伪造指标（如硬编码 PE/融资余额）一律删除
 2. **门禁必须过** — gates_passed=false 的产出要说明原因，下游不得静默采纳
 3. **量化输出是候选信号，非投资建议**
-4. **测试必须绿** — 当前基线 626 passed / 2 skipped
+4. **测试必须绿** — 当前基线 631 passed / 2 skipped
 
 ---
 

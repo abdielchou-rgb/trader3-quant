@@ -90,4 +90,5 @@ files = [
     "trader3/research/labeling.py",
     "trader3/research/rigor.py",
     "trader3/research/sample_weights.py",
+    "trader3/research/factor_library.py",
 ]
