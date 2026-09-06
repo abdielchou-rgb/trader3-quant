@@ -18,10 +18,16 @@ from trader3.runtime.events import BarEvent, OrderIntent
 
 @dataclass
 class AccountSnapshot:
-    """策略可见的账户快照（只读视图，运行时维护）。"""
+    """策略可见的账户快照（只读视图，运行时维护）。
+
+    position_values：symbol → 持仓市值（可选）。提供时风控启用
+    **存量集中度口径**（已持市值 + 本单名义)/权益；缺失时回退
+    增量口径（历史行为，诚实降级）。
+    """
     cash: float = 1_000_000.0
     equity: float = 1_000_000.0
     positions: dict[str, float] = field(default_factory=dict)  # symbol -> qty
+    position_values: dict[str, float] = field(default_factory=dict)  # symbol -> 市值
     last_update_ts: int = 0
 
 

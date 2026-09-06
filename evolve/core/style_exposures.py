@@ -29,8 +29,16 @@ def _last_valid(vec: np.ndarray, w: int) -> np.ndarray:
     return vec[idx[-w - 1:]]
 
 
-def build_style_exposures(panel: dict[str, np.ndarray]) -> np.ndarray:
-    """面板 → 末截面 (N, 3) 标准化风格暴露 [mom_20, size, vol_20]。"""
+def build_style_exposures(panel: dict[str, np.ndarray],
+                          shares: dict[str, float] | None = None,
+                          ) -> np.ndarray:
+    """面板 → 末截面 (N, 3) 标准化风格暴露 [mom_20, size, vol_20]。
+
+    size 列口径（G5 双路径）：
+      - shares 提供（symbol→总股本）：log(close[-1] × shares) 真实市值
+      - 缺失：对数成交额 20 日均值代理（历史行为，诚实回退）
+    panel 可携带 codes: list[str]（列序 ↔ symbol 映射；无则按 S00.. 顺序假定）。
+    """
     close = np.asarray(panel["close"], dtype=np.float64)
     amount = np.asarray(panel.get("amount", close * 1e6), dtype=np.float64)
     if close.ndim != 2:
@@ -42,11 +50,19 @@ def build_style_exposures(panel: dict[str, np.ndarray]) -> np.ndarray:
     with np.errstate(invalid="ignore", divide="ignore"):
         mom = close[-1] / close[-1 - w] - 1.0
 
-    # 2. 市值代理：对数成交额 20 日均值（末截面）
-    with np.errstate(invalid="ignore"):
-        log_amt = np.log(np.where(amount > 0, amount, np.nan))
-    tail = _last_valid(log_amt, STYLE_WINDOW)
-    size = np.nanmean(tail, axis=0) if tail.shape[0] else np.zeros(N)
+    # 2. size：真实市值优先（G5），缺失回退成交额代理
+    if shares:
+        codes = list(panel.get("codes") or [f"S{i:02d}" for i in range(N)])
+        cap = np.array([close[-1, j] * float(shares.get(c, 0.0))
+                        for j, c in enumerate(codes[:N])], dtype=np.float64)
+        with np.errstate(invalid="ignore"):
+            size = np.log(np.where(cap > 0, cap, np.nan))
+        size = np.nan_to_num(size, nan=0.0, posinf=0.0, neginf=0.0)
+    else:
+        with np.errstate(invalid="ignore"):
+            log_amt = np.log(np.where(amount > 0, amount, np.nan))
+        tail = _last_valid(log_amt, STYLE_WINDOW)
+        size = np.nanmean(tail, axis=0) if tail.shape[0] else np.zeros(N)
 
     # 3. 波动：日收益末 20 期 std
     with np.errstate(invalid="ignore"):
@@ -70,13 +86,15 @@ def build_style_exposures(panel: dict[str, np.ndarray]) -> np.ndarray:
 def make_orthogonal_selector(
     panel: dict[str, np.ndarray],
     forward_returns: np.ndarray,
+    shares: dict[str, float] | None = None,
     **selector_kwargs,
 ) -> StrategySelector:
     """构造带正交门禁的 StrategySelector（evolve 管线入口）。
 
     fwd 取末截面（与因子值末截面对齐）——残差化评估只用横截面信息。
+    shares 可选注入真实股本（size 列升级为真实市值，G5）。
     """
-    X = build_style_exposures(panel)
+    X = build_style_exposures(panel, shares=shares)
     fwd = np.asarray(forward_returns, dtype=np.float64)
     # 末截面 fwd：最后一个全有限行（或直接末行 NaN→0 交由评估器 mask）
     last = fwd[-1].copy()

@@ -1,0 +1,230 @@
+[
+  {
+    "universe": "csi1000",
+    "index": 1,
+    "expr": "add(log(vwap), mul(volume, log(rank(sqrt(log(rank(mul(20, vwap))))))))",
+    "score": 0.8199,
+    "annual_return": 0.06462319448530418,
+    "sharpe_ratio": 0.31313575208228106,
+    "max_drawdown": -0.3451249368566423,
+    "excess_return": 0.047121254608230245,
+    "win_rate": 0.5092592592592593,
+    "information_ratio": 0.5505659910721225,
+    "caveats": [
+      "合成数据回测（无 Qlib），实际表现可能差异显著",
+      "已扣除千分之一印花税 + 万二佣金 + 千分之五冲击成本",
+      "组合按月频调仓，等权持有",
+      "信号为模拟生成，非真实因子数据",
+      "真实数据不可用，回退合成数据: 未找到 qlib 数据目录。请设置环境变量 T3_QLIB_DATA_DIR 或传入 data_dir 指向 qlib_bin 目录。"
+    ]
+  },
+  {
+    "universe": "csi1000",
+    "index": 2,
+    "expr": "add(log(vwap), mul(sub(volume, sqrt(vwap)), log(rank(open))))",
+    "score": 0.7827,
+    "annual_return": 0.06462319448530418,
+    "sharpe_ratio": 0.31313575208228106,
+    "max_drawdown": -0.3451249368566423,
+    "excess_return": 0.047121254608230245,
+    "win_rate": 0.5092592592592593,
+    "information_ratio": 0.5505659910721225,
+    "caveats": [
+      "合成数据回测（无 Qlib），实际表现可能差异显著",
+      "已扣除千分之一印花税 + 万二佣金 + 千分之五冲击成本",
+      "组合按月频调仓，等权持有",
+      "信号为模拟生成，非真实因子数据",
+      "真实数据不可用，回退合成数据: 未找到 qlib 数据目录。请设置环境变量 T3_QLIB_DATA_DIR 或传入 data_dir 指向 qlib_bin 目录。"
+    ]
+  },
+  {
+    "universe": "csi1000",
+    "index": 3,
+    "expr": "add(log(volume), mul(sub(volume, sqrt(abs(add(close, 0.5)))), log(rank(open))))",
+    "score": 0.7823,
+    "annual_return": 0.06462319448530418,
+    "sharpe_ratio": 0.31313575208228106,
+    "max_drawdown": -0.3451249368566423,
+    "excess_return": 0.047121254608230245,
+    "win_rate": 0.5092592592592593,
+    "information_ratio": 0.5505659910721225,
+    "caveats": [
+      "合成数据回测（无 Qlib），实际表现可能差异显著",
+      "已扣除千分之一印花税 + 万二佣金 + 千分之五冲击成本",
+      "组合按月频调仓，等权持有",
+      "信号为模拟生成，非真实因子数据",
+      "真实数据不可用，回退合成数据: 未找到 qlib 数据目录。请设置环境变量 T3_QLIB_DATA_DIR 或传入 data_dir 指向 qlib_bin 目录。"
+    ]
+  },
+  {
+    "universe": "csi1000",
+    "index": 4,
+    "expr": "sub(volume, sqrt(zscore(volume)))",
+    "score": 0.6992,
+    "annual_return": 0.06462319448530418,
+    "sharpe_ratio": 0.31313575208228106,
+    "max_drawdown": -0.3451249368566423,
+    "excess_return": 0.047121254608230245,
+    "win_rate": 0.5092592592592593,
+    "information_ratio": 0.5505659910721225,
+    "caveats": [
+      "合成数据回测（无 Qlib），实际表现可能差异显著",
+      "已扣除千分之一印花税 + 万二佣金 + 千分之五冲击成本",
+      "组合按月频调仓，等权持有",
+      "信号为模拟生成，非真实因子数据",
+      "真实数据不可用，回退合成数据: 未找到 qlib 数据目录。请设置环境变量 T3_QLIB_DATA_DIR 或传入 data_dir 指向 qlib_bin 目录。"
+    ]
+  },
+  {
+    "universe": "csi1000",
+    "index": 5,
+    "expr": "add(log(vwap), volume)",
+    "score": 0.6992,
+    "annual_return": 0.06462319448530418,
+    "sharpe_ratio": 0.31313575208228106,
+    "max_drawdown": -0.3451249368566423,
+    "excess_return": 0.047121254608230245,
+    "win_rate": 0.5092592592592593,
+    "information_ratio": 0.5505659910721225,
+    "caveats": [
+      "合成数据回测（无 Qlib），实际表现可能差异显著",
+      "已扣除千分之一印花税 + 万二佣金 + 千分之五冲击成本",
+      "组合按月频调仓，等权持有",
+      "信号为模拟生成，非真实因子数据",
+      "真实数据不可用，回退合成数据: 未找到 qlib 数据目录。请设置环境变量 T3_QLIB_DATA_DIR 或传入 data_dir 指向 qlib_bin 目录。"
+    ]
+  },
+  {
+    "universe": "csi500",
+    "index": 1,
+    "expr": "add(log(vwap), mul(sub(volume, sub(open, open)), log(zscore(volume))))",
+    "score": 0.7573,
+    "annual_return": 0.06462319448530418,
+    "sharpe_ratio": 0.31313575208228106,
+    "max_drawdown": -0.3451249368566423,
+    "excess_return": 0.047121254608230245,
+    "win_rate": 0.5092592592592593,
+    "information_ratio": 0.5505659910721225,
+    "caveats": [
+      "合成数据回测（无 Qlib），实际表现可能差异显著",
+      "已扣除千分之一印花税 + 万二佣金 + 千分之五冲击成本",
+      "组合按月频调仓，等权持有",
+      "信号为模拟生成，非真实因子数据",
+      "真实数据不可用，回退合成数据: 未找到 qlib 数据目录。请设置环境变量 T3_QLIB_DATA_DIR 或传入 data_dir 指向 qlib_bin 目录。"
+    ]
+  },
+  {
+    "universe": "csi500",
+    "index": 2,
+    "expr": "zscore(sub(volume, sqrt(vwap)))",
+    "score": 0.6812,
+    "annual_return": 0.06462319448530418,
+    "sharpe_ratio": 0.31313575208228106,
+    "max_drawdown": -0.3451249368566423,
+    "excess_return": 0.047121254608230245,
+    "win_rate": 0.5092592592592593,
+    "information_ratio": 0.5505659910721225,
+    "caveats": [
+      "合成数据回测（无 Qlib），实际表现可能差异显著",
+      "已扣除千分之一印花税 + 万二佣金 + 千分之五冲击成本",
+      "组合按月频调仓，等权持有",
+      "信号为模拟生成，非真实因子数据",
+      "真实数据不可用，回退合成数据: 未找到 qlib 数据目录。请设置环境变量 T3_QLIB_DATA_DIR 或传入 data_dir 指向 qlib_bin 目录。"
+    ]
+  },
+  {
+    "universe": "csi500",
+    "index": 3,
+    "expr": "zscore(volume)",
+    "score": 0.6811,
+    "annual_return": 0.06462319448530418,
+    "sharpe_ratio": 0.31313575208228106,
+    "max_drawdown": -0.3451249368566423,
+    "excess_return": 0.047121254608230245,
+    "win_rate": 0.5092592592592593,
+    "information_ratio": 0.5505659910721225,
+    "caveats": [
+      "合成数据回测（无 Qlib），实际表现可能差异显著",
+      "已扣除千分之一印花税 + 万二佣金 + 千分之五冲击成本",
+      "组合按月频调仓，等权持有",
+      "信号为模拟生成，非真实因子数据",
+      "真实数据不可用，回退合成数据: 未找到 qlib 数据目录。请设置环境变量 T3_QLIB_DATA_DIR 或传入 data_dir 指向 qlib_bin 目录。"
+    ]
+  },
+  {
+    "universe": "csi500",
+    "index": 4,
+    "expr": "volume",
+    "score": 0.6811,
+    "annual_return": 0.06462319448530418,
+    "sharpe_ratio": 0.31313575208228106,
+    "max_drawdown": -0.3451249368566423,
+    "excess_return": 0.047121254608230245,
+    "win_rate": 0.5092592592592593,
+    "information_ratio": 0.5505659910721225,
+    "caveats": [
+      "合成数据回测（无 Qlib），实际表现可能差异显著",
+      "已扣除千分之一印花税 + 万二佣金 + 千分之五冲击成本",
+      "组合按月频调仓，等权持有",
+      "信号为模拟生成，非真实因子数据",
+      "真实数据不可用，回退合成数据: 未找到 qlib 数据目录。请设置环境变量 T3_QLIB_DATA_DIR 或传入 data_dir 指向 qlib_bin 目录。"
+    ]
+  },
+  {
+    "universe": "csi500",
+    "index": 5,
+    "expr": "log(volume)",
+    "score": 0.6811,
+    "annual_return": 0.06462319448530418,
+    "sharpe_ratio": 0.31313575208228106,
+    "max_drawdown": -0.3451249368566423,
+    "excess_return": 0.047121254608230245,
+    "win_rate": 0.5092592592592593,
+    "information_ratio": 0.5505659910721225,
+    "caveats": [
+      "合成数据回测（无 Qlib），实际表现可能差异显著",
+      "已扣除千分之一印花税 + 万二佣金 + 千分之五冲击成本",
+      "组合按月频调仓，等权持有",
+      "信号为模拟生成，非真实因子数据",
+      "真实数据不可用，回退合成数据: 未找到 qlib 数据目录。请设置环境变量 T3_QLIB_DATA_DIR 或传入 data_dir 指向 qlib_bin 目录。"
+    ]
+  },
+  {
+    "universe": "etf",
+    "index": 1,
+    "expr": "add(div(abs(div(low, volume)), abs(div(low, volume))), sub(low, open))",
+    "score": 1.5805,
+    "annual_return": 0.06462319448530418,
+    "sharpe_ratio": 0.31313575208228106,
+    "max_drawdown": -0.3451249368566423,
+    "excess_return": 0.047121254608230245,
+    "win_rate": 0.5092592592592593,
+    "information_ratio": 0.5505659910721225,
+    "caveats": [
+      "合成数据回测（无 Qlib），实际表现可能差异显著",
+      "已扣除千分之一印花税 + 万二佣金 + 千分之五冲击成本",
+      "组合按月频调仓，等权持有",
+      "信号为模拟生成，非真实因子数据",
+      "真实数据不可用，回退合成数据: 未找到 qlib 数据目录。请设置环境变量 T3_QLIB_DATA_DIR 或传入 data_dir 指向 qlib_bin 目录。"
+    ]
+  },
+  {
+    "universe": "etf",
+    "index": 2,
+    "expr": "ts_corr(open, low, 10)",
+    "score": 0.4871,
+    "annual_return": 0.06462319448530418,
+    "sharpe_ratio": 0.31313575208228106,
+    "max_drawdown": -0.3451249368566423,
+    "excess_return": 0.047121254608230245,
+    "win_rate": 0.5092592592592593,
+    "information_ratio": 0.5505659910721225,
+    "caveats": [
+      "合成数据回测（无 Qlib），实际表现可能差异显著",
+      "已扣除千分之一印花税 + 万二佣金 + 千分之五冲击成本",
+      "组合按月频调仓，等权持有",
+      "信号为模拟生成，非真实因子数据",
+      "真实数据不可用，回退合成数据: 未找到 qlib 数据目录。请设置环境变量 T3_QLIB_DATA_DIR 或传入 data_dir 指向 qlib_bin 目录。"
+    ]
+  }
+]

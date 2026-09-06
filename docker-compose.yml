@@ -8,7 +8,7 @@ services:
     container_name: t3-api
     restart: unless-stopped
     ports:
-      - "127.0.0.1:8000:8000"   # 只绑本机；远程访问请前置反代+TLS
+      - "127.0.0.1:8100:8000"   # 只绑本机（8100 避开常见 8000 占用）；远程访问请前置反代+TLS
     environment:
       TRADER3_API_KEY: ${TRADER3_API_KEY:-}
       T3_QLIB_DATA_DIR: /data/qlib_bin

@@ -208,13 +208,14 @@ class PreTradeRiskGateway:
         if self._drift_halted and not is_closing:
             return DenyReason.DRIFT_HALT
 
-        # 集中度（只约束开仓方向）
+        # 集中度（只约束开仓方向；G4 双口径）
         if not is_closing and account.equity > 0:
             notional = intent.qty * float(intent.price or 0.0)
-            held_value = 0.0  # 快照持仓只有股数，无市值——用集中度近似：
-            # 权重上限按"名义金额/权益"口径（保守：不计已持有市值）
-            _ = held_value
-            projected = notional / account.equity
+            # 存量口径（position_values 提供时）：已持市值 + 本单名义 / 权益
+            # —— 拦截"每单都不超限但累计绕过"的路径
+            held_value = float(getattr(account, "position_values", {})
+                              .get(intent.symbol, 0.0) or 0.0)
+            projected = (held_value + notional) / account.equity
             if projected > self.max_position_weight:
                 return DenyReason.CONCENTRATION
 
