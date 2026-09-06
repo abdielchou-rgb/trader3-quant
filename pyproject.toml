@@ -94,4 +94,5 @@ files = [
     "trader3/research/collaborative.py",
     "trader3/research/ml_pipeline.py",
     "trader3/research/meta_ml.py",
+    "trader3/research/stock_selector.py",
 ]
