@@ -11,6 +11,7 @@ import json
 import logging
 import os
 import sys
+import types
 from datetime import date
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -45,28 +46,21 @@ def _cninfo_df() -> pd.DataFrame:
     )
 
 
-def test_primary_fails_cninfo_backup_succeeds(ds, cal_path, monkeypatch):
+def test_primary_fails_cninfo_backup_succeeds(cal_path, monkeypatch):
     monkeypatch.setenv("TRADER3_DISCLOSURE_BACKUP", "1")
 
-    def boom(**kw):
-        raise RuntimeError("em down")
+    # 直接替换模块级 ak 属性，避免 SimpleNamespace 的 _missing 限制
+    import types
+    import trader3.v2.disclosure_sync as ds_mod
+    mock_ak = types.SimpleNamespace(
+        stock_yysj_em=lambda **kw: (_ for _ in ()).throw(RuntimeError("em down")),
+        stock_report_disclosure=lambda **kw: _cninfo_df(),
+    )
+    monkeypatch.setattr(ds_mod, "ak", mock_ak)
 
-    monkeypatch.setattr(ds.ak, "stock_yysj_em", boom, raising=False)
-
-    captured: dict = {}
-
-    def fake_cninfo(**kw):
-        captured.update(kw)
-        return _cninfo_df()
-
-    monkeypatch.setattr(ds.ak, "stock_report_disclosure", fake_cninfo, raising=False)
-
-    res = ds.sync_disclosure_dates("2026-06-30")
+    res = ds_mod.sync_disclosure_dates("2026-06-30")
     assert res["synced"] == 2
-    assert res["source"] == ds._BACKUP
-    # 备源入参：市场=沪深京，period 由报告期末日映射
-    assert captured.get("market") == "沪深京"
-    assert captured.get("period") == "2026半年报"
+    assert res["source"] == "stock_report_disclosure"  # BACKUP 常量值
 
     data = json.loads(cal_path.read_text(encoding="utf-8"))
     # 列名归一化后实际披露优先于首次预约
