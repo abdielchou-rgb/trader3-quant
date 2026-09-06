@@ -65,6 +65,8 @@ def main():
     parser.add_argument("--deep-epochs", type=int, default=300, help="LSTM 训练轮数")
     parser.add_argument("--orthogonal", action="store_true",
                         help="启用正交残差化门禁（Barra 风格剥离，拒绝共线因子）")
+    parser.add_argument("--dsr", action="store_true",
+                        help="启用 Deflated Sharpe 验收闸门（惩罚累计试验次数，拒绝过拟合候选）")
     parser.add_argument("--top-k", type=int, default=5, help="最终筛选 Top-K")
     args = parser.parse_args()
 
@@ -117,14 +119,22 @@ def main():
     # ── 收集所有候选（从历史最优 + 最终种群），携带因子值用于相关性去重 ──
     from core.gp import evaluate as _eval_node
 
+    from core.selection import compute_ic_series
+
+    _close_p = panel.get("close")
+
     def _signal_of(expr_or_node):
         node = parse_expr(expr_or_node) if isinstance(expr_or_node, str) else expr_or_node
         return _eval_node(node, panel)
+
+    def _ic_series_of(sig):
+        return compute_ic_series(sig, fwd, _close_p)
 
     candidates = []
     # 历史每代最优
     for h in engine.best_history:
         if h.get("expr"):
+            sig = _signal_of(h["expr"])
             candidates.append({
                 "expr": h["expr"],
                 "ic": h.get("ic", 0),
@@ -134,11 +144,13 @@ def main():
                 "fitness": h.get("fitness", 0),
                 "generation": h.get("generation", 0),
                 "source": data_label,
-                "values": _signal_of(h["expr"]),
+                "values": sig,
+                "ic_series": _ic_series_of(sig),
             })
     # 最终种群
     for node in engine.population:
         f = compute_fitness(node, panel, fwd)
+        sig = _eval_node(node, panel)
         candidates.append({
             "expr": node.to_str(),
             "ic": f["ic"],
@@ -148,7 +160,8 @@ def main():
             "fitness": f["fitness"],
             "generation": args.gen,
             "source": data_label,
-            "values": _eval_node(node, panel),
+            "values": sig,
+            "ic_series": _ic_series_of(sig),
         })
 
     # ── LSTM 深度打分器候选（与 GP 候选并列，同一筛选门禁） ──
@@ -170,6 +183,7 @@ def main():
             "generation": -1,
             "source": f"{data_label}+lstm",
             "values": deep_scores,
+            "ic_series": _ic_series_of(deep_scores),
         })
         logger.info(
             f"LSTM 候选: backend={deep_meta['backend']} "
@@ -179,13 +193,19 @@ def main():
         )
 
     # ── 筛选 ──
+    # DSR 闸门：n_trials = 累计个体评估数（诚实上报试验次数，防过拟合）
+    _n_trials = args.gen * args.pop * 2 if args.dsr else None
     if args.orthogonal:
         from core.style_exposures import make_orthogonal_selector
 
-        selector = make_orthogonal_selector(panel, fwd)
+        selector = make_orthogonal_selector(panel, fwd, n_trials=_n_trials)
         logger.info("正交门禁已启用：Barra 风格暴露 [mom20/size/vol20] 残差化")
+        if args.dsr:
+            logger.info("DSR 闸门已启用：n_trials=%d（累计评估次数）", _n_trials)
     else:
-        selector = StrategySelector()
+        selector = StrategySelector(n_trials=_n_trials)
+        if args.dsr:
+            logger.info("DSR 闸门已启用：n_trials=%d（累计评估次数）", _n_trials)
     selected = selector.select_best(candidates, top_k=args.top_k)
 
     strategies_dir = _ROOT / "evolve" / "strategies"

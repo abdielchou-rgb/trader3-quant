@@ -27,7 +27,7 @@ docs/quant-knowledge/  # 全景认知库：qlib/mlfinlab/框架对比/因子论�
 config/             # 策略/约束 YAML
 scripts/            # update_market_data.py（qlib_bin 增量管线）等
 shared_state/       # 原子写共享状态 + paper/（纸面账户）+ _quarantine_pre_audit/
-tests/              # 623 个测试（621 passed / 2 skipped 基线）；testpaths 已在 pyproject 隔离
+tests/              # 628 个测试（626 passed / 2 skipped 基线）；testpaths 已在 pyproject 隔离
 ```
 
 ## 数据源（重要）
@@ -57,6 +57,16 @@ tests/              # 623 个测试（621 passed / 2 skipped 基线）；testpat
 - Gate7: 产出显式 used_synthetic=True 而 caveats 未标注 → 拦截
 - 绕过门禁的路径（直调 .execute() / gates_enabled=False）仅限调试，产物不得外流
 
+## 进化验收闸门（research 层，2026-09 落地）
+
+- **正交门禁**：StrategySelector(barra_styles=, forward_returns=) → P_orth 剥离
+  mom20/size/vol20 风格，残差 Rank-IC 不足拒共线（run_evolution --orthogonal）
+- **DSR 门禁**：StrategySelector(n_trials=) → 候选带 ic_series 时用 Deflated Sharpe
+  惩罚累计试验次数（Bailey & López de Prado 2014），拒绝过拟合候选
+  （run_evolution --dsr；n_trials=gen×pop×2 诚实上报）
+- **候选契约**：candidates 须带 values + ic_series（compute_ic_series 逐期 Rank-IC），
+  否则对应门禁自动跳过（向后兼容）
+
 ## 代码工程方法论（改 trader3 代码时）
 
 ### 1. 改代码 → TDD
@@ -81,7 +91,7 @@ Standards 轴（风格）与 Spec 轴（需求）分开报告。
 1. **数据必须带来源** — 真实/合成标注清楚，禁止编造；伪造指标（如硬编码 PE/融资余额）一律删除
 2. **门禁必须过** — gates_passed=false 的产出要说明原因，下游不得静默采纳
 3. **量化输出是候选信号，非投资建议**
-4. **测试必须绿** — 当前基线 621 passed / 2 skipped
+4. **测试必须绿** — 当前基线 626 passed / 2 skipped
 
 ---
 

@@ -48,6 +48,8 @@ class StrategySelector:
         barra_styles: np.ndarray | None = None,
         forward_returns: np.ndarray | None = None,
         orth_ic_min: float = 0.01,
+        n_trials: int | None = None,
+        dsr_min: float = 0.90,
     ):
         self.ic_min = ic_min
         self.icir_min = icir_min
@@ -63,6 +65,9 @@ class StrategySelector:
         if barra_styles is not None:
             from core.orthogonal_fitness import OrthogonalFitnessEvaluator
             self._orth_eval = OrthogonalFitnessEvaluator(barra_styles)
+        # ── DSR 验收闸门（解剖结论 S2）：候选入库前惩罚试验次数 ──
+        self.n_trials = n_trials  # 整个进化实验累计个体评估数；None=不启用
+        self.dsr_min = dsr_min
 
     def select(self, candidates: list[dict]) -> list[SelectionResult]:
         """
@@ -127,6 +132,22 @@ class StrategySelector:
                 }
             except Exception:  # noqa: BLE001 — 形状不齐等评估失败 → 保守跳过该门禁
                 gates["orthogonality"] = {"passed": True, "value": "n/a (eval skipped)"}
+
+        # DSR 门禁（可选，解剖结论 S2）：候选带逐期 IC 时序时，
+        # 用 Deflated Sharpe（惩罚整个进化的累计试验次数）判显著。
+        # 缺 ic_series 或未注入 n_trials → 跳过（向后兼容）。
+        if self.n_trials is not None:
+            ic_series = cand.get("ic_series")
+            if ic_series is not None and _has_finite(ic_series):
+                try:
+                    dsr = _deflated_sharpe(np.asarray(ic_series, dtype=np.float64),
+                                           self.n_trials)
+                    gates["dsr"] = {
+                        "passed": dsr >= self.dsr_min,
+                        "value": round(dsr, 4),
+                    }
+                except Exception:  # noqa: BLE001 — 退化序列保守跳过
+                    gates["dsr"] = {"passed": True, "value": "n/a (dsr skip)"}
 
         passed = all(g["passed"] for g in gates.values())
 
@@ -195,3 +216,77 @@ def _expr_similarity(e1: str, e2: str) -> float:
 def _tokenize_expr(expr: str) -> list[str]:
     import re
     return re.findall(r"[a-zA-Z_][a-zA-Z0-9_]*|\d+", expr)
+
+
+def _has_finite(a) -> bool:
+    arr = np.asarray(a, dtype=np.float64)
+    f = arr[np.isfinite(arr)]
+    return len(f) >= 10
+
+
+def compute_ic_series(signal: np.ndarray, forward_returns: np.ndarray,
+                      close_panel: np.ndarray | None = None) -> list[float]:
+    """逐期横截面 Rank-IC 序列（供 DSR 门禁）。与 compute_fitness 同口径。
+
+    Returns
+    -------
+    per-period Spearman IC list（剔除样本不足/退化期）
+    """
+    from .gp import _cs_rank
+
+    signal = np.asarray(signal, dtype=np.float64)
+    fwd = np.asarray(forward_returns, dtype=np.float64)
+    T, N = signal.shape
+    ics: list[float] = []
+    for t in range(T):
+        s = signal[t]
+        r = fwd[t]
+        mask = np.isfinite(r)
+        if close_panel is not None:
+            mask &= close_panel[t] > 0
+        if mask.sum() < max(5, N // 3):
+            continue
+        s, r = s[mask], r[mask]
+        if np.std(s) < 1e-10 or np.std(r) < 1e-10:
+            continue
+        sr = _cs_rank(s.reshape(1, -1)).ravel()
+        rr = _cs_rank(r.reshape(1, -1)).ravel()
+        c = np.corrcoef(sr, rr)[0, 1]
+        if np.isfinite(c):
+            ics.append(float(c))
+    return ics
+
+
+def _deflated_sharpe(ic_series: np.ndarray, n_trials: int) -> float:
+    """Deflated Sharpe（Bailey & López de Prado 2014），输入为逐期 IC 序列。
+
+    惩罚试验次数：n_trials 越大，基准 SR* 越高，DSR 越低。
+    口径：期级（IC 每期一个值，直接用 mean/std，不年化）。
+    """
+    import math
+
+    from scipy import stats
+
+    ic = np.asarray(ic_series, dtype=np.float64)
+    ic = ic[np.isfinite(ic)]
+    if len(ic) < 10 or n_trials < 1:
+        return 0.0
+    mu = float(ic.mean())
+    sd = float(ic.std(ddof=1))
+    if sd < 1e-12:
+        return 0.0
+    z = (ic - mu) / sd
+    skew = float(np.mean(z ** 3))
+    kurt = float(np.mean(z ** 4)) - 3.0  # excess kurtosis
+    sr = mu / sd  # 期级 IC-SR
+    # SR̂ 估计方差 → SR* 期望最大值
+    est_var = 1.0 - skew * sr + kurt / 4.0 * sr ** 2
+    sr_std = math.sqrt(max(est_var, 1e-12) / max(len(ic) - 1, 1))
+    _euler = 0.5772156649015329
+    inv_n = stats.norm.ppf(1.0 - 1.0 / n_trials)
+    inv_ne = stats.norm.ppf(1.0 - 1.0 / (n_trials * math.e))
+    sr_star = sr_std * ((1.0 - _euler) * inv_n + _euler * inv_ne)
+    # PSR
+    denom = math.sqrt(max(1.0 - skew * sr + kurt / 4.0 * sr ** 2, 1e-12))
+    z_psr = (sr - max(sr_star, 0.0)) * math.sqrt(len(ic) - 1) / denom
+    return float(stats.norm.cdf(z_psr))
