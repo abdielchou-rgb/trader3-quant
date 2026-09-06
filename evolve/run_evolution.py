@@ -67,6 +67,8 @@ def main():
                         help="启用正交残差化门禁（Barra 风格剥离，拒绝共线因子）")
     parser.add_argument("--dsr", action="store_true",
                         help="启用 Deflated Sharpe 验收闸门（惩罚累计试验次数，拒绝过拟合候选）")
+    parser.add_argument("--collaborative", action="store_true",
+                        help="启用协同目标（适应度含对精英池的边际贡献，挖互补因子集合）")
     parser.add_argument("--top-k", type=int, default=5, help="最终筛选 Top-K")
     args = parser.parse_args()
 
@@ -107,8 +109,12 @@ def main():
         population_size=args.pop,
         generations=args.gen,
         seed=args.seed,
+        collaborative=args.collaborative,
         log_dir=str(_ROOT / "evolve" / "evolution_log"),
     )
+    if args.collaborative:
+        logger.info("协同目标已启用：适应度=单因子IC×%.1f + 对精英池边际贡献×%.1f",
+                    1.0 - engine.mc_weight, engine.mc_weight * 2.0)
 
     start_t = time.time()
     best_node, best_fit = engine.evolve(panel, fwd)

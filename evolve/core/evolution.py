@@ -35,6 +35,9 @@ class EvolutionEngine:
         seed: int = 42,
         n_workers: int = 1,
         log_dir: str = "",
+        collaborative: bool = False,
+        elite_pool_cap: int = 5,
+        mc_weight: float = 0.5,
     ):
         self.population_size = population_size
         self.generations = generations
@@ -51,6 +54,16 @@ class EvolutionEngine:
         self.population: list[Node] = []
         self.fitness_history: list[float] = []
         self.best_history: list[dict] = []
+        # ── 协同目标（S1 闭环）：适应度含"对精英池边际贡献" ──
+        self.collaborative = collaborative
+        self.elite_pool_cap = max(1, elite_pool_cap)
+        self.mc_weight = mc_weight
+        self.elite_pool: list[np.ndarray] = []   # 历代最优个体因子值矩阵
+        self.elite_pool_exprs: list[str] = []    # 对应表达式（去重参考）
+
+    @property
+    def elite_pool_size(self) -> int:
+        return len(self.elite_pool)
 
     # ── 初始化种群 ──
 
@@ -102,9 +115,14 @@ class EvolutionEngine:
                 "icir": best_fit.get("icir", 0),
                 "monotonicity": best_fit.get("monotonicity", 0),
                 "long_short": best_fit.get("long_short", 0),
+                "mc": best_fit.get("mc", 0.0),
+                "elite_pool_size": self.elite_pool_size,
                 "avg_fitness": round(avg_fit, 4),
                 "elapsed": round(time.time() - start, 2),
             })
+
+            # 协同模式：把本代表现个体入精英池（供下代边际贡献基准）
+            self._update_elite_pool(panel, forward_returns, fitness_map)
 
             logger.info(
                 f"[Gen {gen+1}/{gens}] 最优: {self.best_history[-1]['expr'][:60]} | "
@@ -133,14 +151,64 @@ class EvolutionEngine:
         return self.population[best_idx], best_fit
 
     def _fitness_for(self, node: Node, panel, fwd) -> dict:
+        if self.collaborative:
+            return self._mc_fitness_for(node, panel, fwd)
         return compute_fitness(node, panel, fwd)
+
+    def _mc_fitness_for(self, node: Node, panel, fwd) -> dict:
+        """协同适应度：单因子 fitness + 对精英池边际贡献加权。
+
+        用当前 elite_pool 作基准：pool 空 → mc = 自身 combo IC（起点）；
+        pool 非空 → mc = 加入 pool 的组合 IC 增量（边际贡献）。
+        """
+        from trader3.research.collaborative import (  # noqa: F401
+            combo_rank_ic,
+            evaluate_marginal_contribution,
+        )
+
+        from .gp import evaluate as _eval_node
+
+        base = compute_fitness(node, panel, fwd)
+        signal = _eval_node(node, panel)
+        signal = np.nan_to_num(signal, nan=0.0, posinf=0.0, neginf=0.0)
+        if not self.elite_pool:
+            mc = combo_rank_ic([signal], fwd)  # 空池 = 自身组合 IC
+        else:
+            mc = evaluate_marginal_contribution(signal, self.elite_pool, fwd)
+        base["mc"] = float(mc)
+        base["fitness"] = base.get("fitness", 0.0) * (1.0 - self.mc_weight) \
+            + float(mc) * self.mc_weight * 2.0  # mc 放大权重让增量主导
+        return base
 
     def _evaluate_population(self, panel, fwd) -> dict[int, dict]:
         """评估整个种群（串行；panel 较大时进程间复制开销高于计算本身）"""
         if self.n_workers > 1:
             logger.info("当前版本为串行评估，n_workers=%s 被忽略", self.n_workers)
+        if self.collaborative:
+            return {i: self._mc_fitness_for(self.population[i], panel, fwd)
+                    for i in range(len(self.population))}
         return {i: compute_fitness(self.population[i], panel, fwd)
                 for i in range(len(self.population))}
+
+    def _update_elite_pool(self, panel, fwd, fitness_map: dict[int, dict]) -> None:
+        """把当代表现最好（按 fitness）的个体入精英池，cap 去重截断。"""
+        if not self.collaborative:
+            return
+        from .gp import evaluate as _eval_node
+
+        ranked = sorted(fitness_map.items(),
+                        key=lambda kv: kv[1].get("fitness", -999), reverse=True)
+        for i, _f in ranked[: max(1, self.elitism)]:
+            expr = self.population[i].to_str()
+            if expr in self.elite_pool_exprs:
+                continue
+            sig = _eval_node(self.population[i], panel)
+            sig = np.nan_to_num(sig, nan=0.0, posinf=0.0, neginf=0.0)
+            self.elite_pool.append(sig)
+            self.elite_pool_exprs.append(expr)
+            if len(self.elite_pool) > self.elite_pool_cap:
+                self.elite_pool = self.elite_pool[-self.elite_pool_cap:]
+                self.elite_pool_exprs = self.elite_pool_exprs[-self.elite_pool_cap:]
 
     def _next_generation(self, fitness_map: dict[int, dict]) -> None:
         """选择 + 交叉 + 变异 → 下一代种群"""

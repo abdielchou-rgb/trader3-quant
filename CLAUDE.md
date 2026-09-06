@@ -27,7 +27,7 @@ docs/quant-knowledge/  # 全景认知库：qlib/mlfinlab/框架对比/因子论�
 config/             # 策略/约束 YAML
 scripts/            # update_market_data.py（qlib_bin 增量管线）等
 shared_state/       # 原子写共享状态 + paper/（纸面账户）+ _quarantine_pre_audit/
-tests/              # 638 个测试（636 passed / 2 skipped 基线）；testpaths 已在 pyproject 隔离
+tests/              # 643 个测试（641 passed / 2 skipped 基线）；testpaths 已在 pyproject 隔离
 ```
 
 ## 数据源（重要）
@@ -73,6 +73,11 @@ tests/              # 638 个测试（636 passed / 2 skipped 基线）；testpat
   （等权 zscore 合成组合 IC）+ evaluate_marginal_contribution（边际 IC 增量，克隆≈0/
   独立正/噪声不增）+ greedy_select（贪心去冗余）—— GP 进化适应度可升级为
   "加入精英池的边际贡献"替代裸 IC
+- **协同目标进化**（evolve/core/evolution.py + run_evolution --collaborative）：
+  EvolutionEngine(collaborative=True) 维护 elite_pool（历代最优因子矩阵），
+  适应度 = 单因子 fitness×0.5 + 对精英池边际贡献×1.0（mc_weight 可调）；
+  代末把精英入池（去重+cap 截断），best_history 记录 mc/elite_pool_size；
+  默认关 = 行为完全不变（向后兼容测试覆盖）
 
 ## 代码工程方法论（改 trader3 代码时）
 
@@ -98,7 +103,7 @@ Standards 轴（风格）与 Spec 轴（需求）分开报告。
 1. **数据必须带来源** — 真实/合成标注清楚，禁止编造；伪造指标（如硬编码 PE/融资余额）一律删除
 2. **门禁必须过** — gates_passed=false 的产出要说明原因，下游不得静默采纳
 3. **量化输出是候选信号，非投资建议**
-4. **测试必须绿** — 当前基线 636 passed / 2 skipped
+4. **测试必须绿** — 当前基线 641 passed / 2 skipped
 
 ---
 
