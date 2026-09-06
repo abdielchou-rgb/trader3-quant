@@ -46,7 +46,7 @@ class BaseSource:
     source_name: str = ""
     availability: str = "local"   # sandbox / local / manual
 
-    def fetch(self, keywords: str, limit: int = 10) -> list[SourceItem]:
+    def fetch(self, keywords: str = "", limit: int = 10) -> list[SourceItem]:
         raise NotImplementedError
 
 

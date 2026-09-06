@@ -12,6 +12,8 @@
 - 费率唯一事实来源：costs.DEFAULT_COSTS（bp/10000 换算），本模块不定义常量
 - 涨跌停拦截：涨停禁买入（一字板无买盘），跌停禁卖出（一字板无卖盘）
 - 买入按 buy_frozen_coeff 冻资再成交（防超买）
+- 涨跌停拦截：涨停禁买入（一字板无买盘），跌停禁卖出（一字板无卖盘）
+- 买入按 buy_frozen_coeff 冻资再成交（防超买）
 
 用法：
     from trader3.v2.execution_realism import PositionT1Account, PriceLimitMatcher
@@ -19,16 +21,25 @@
     ok, msg = acct.buy("600519", 100, 12.5)      # 实时成交模拟（T+1 两态）
     ok, msg = acct.sell("600519", 50, 13.0)      # 仅可卖 his 量
     acct.settle()                                  # 日终：today->his + 计数复位
+
 """
 from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from typing import Protocol
 
 from trader3.v2.costs import DEFAULT_COSTS
-from trader3.v2.fillers import FixedSizeFiller
+from trader3.v2.fillers import FixedSizeFiller, BarVolumeFiller
 
 logger = logging.getLogger("trader3.v2.execution_realism")
+
+
+class Filler(Protocol):
+    """成交量填充器协议（backtrader Fillers 风格）"""
+    def fill(self, action: str, requested: float, price: float,
+             prev_close: float | None = None, limit_pct: float | None = None,
+             bar_volume: float | None = None) -> float: ...
 
 
 @dataclass
@@ -56,7 +67,7 @@ class PositionT1Account:
     def __init__(self, cash: float = 1e7, buy_frozen_coeff: float = 1.0,
                  commission_rate: float | None = None,
                  stamp_tax_rate: float | None = None,
-                 filler: object | None = None):
+                 filler: Filler | None = None):
         self.cash = cash
         self.buy_frozen_coeff = buy_frozen_coeff  # 买入冻资系数（A股一般全额，1.0）
         # 费率唯一事实来源 costs.DEFAULT_COSTS：bp/10000 换算，显式传参可覆盖
@@ -65,7 +76,7 @@ class PositionT1Account:
         self.stamp_tax_rate = (DEFAULT_COSTS.stamp_tax_bp / 10000.0
                                if stamp_tax_rate is None else stamp_tax_rate)
         self.min_commission = DEFAULT_COSTS.min_commission  # 最低佣金（元/笔）
-        self.filler = filler or FixedSizeFiller() # 成交量填充器（backtrader Fillers 风格）
+        self.filler: Filler = filler or FixedSizeFiller()  # 成交量填充器（backtrader Fillers 风格）
         self.stocks: dict[str, PositionT1Stock] = {}
         self._today_value = 0.0   # 当日成交金额（供 风控流控 用）
         self._today_orders = 0

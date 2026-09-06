@@ -169,7 +169,7 @@ class OrderManager:
     def reconcile(self, weights: pd.Series, filled: list[Order],
                   prices: dict[str, float], equity: float) -> pd.Series:
         """用已成交订单反推实际权重（供回测/审计）。"""
-        actual = {}
+        actual: dict[str, float] = {}
         for o in filled:
             if "fill" not in str(getattr(o, "status", "")).lower():
                 # 仅统计已成交

@@ -187,7 +187,7 @@ def sync_disclosure_dates(quarter: str, codes: list[str] | None = None) -> dict:
     if codes:
         wanted = {_norm_code(c) for c in codes}
 
-    source = _PRIMARY
+    source: str | None = _PRIMARY
     try:
         df = _fetch_primary(q)
     except Exception as exc:
