@@ -17,9 +17,8 @@
 trader3/            # 核心包（10 个 Tool，全部经 IronGate）
   tools/            #   signal / valuation / backtest / optimize / execution
   v2/               # 新版子系统：事件采集/自选股/触发/风控链/纸面交易/comps TTM
-  research/         # 研究层（R1-R7）：experiment(档案)/labeling(三重屏障)/rigor(PSR·DSR)/
-                    #   sample_weights(唯一性)/factor_library(Alpha158骨架)/collaborative/
-                    #   ml_pipeline(因子面板→sklearn打分→OOS逐日RankIC)
+  research/         # 研究层（R1-R8）：experiment/labeling/rigor/sample_weights/
+                    #   factor_library(Alpha158)/collaborative/ml_pipeline/meta_ml
   runtime/          # 双模同构运行时（replay+live+events+strategy）
   risk/             # 前置硬风控（gateway/drift_halt）
   api/              # FastAPI（X-API-Key 鉴权）
@@ -28,7 +27,7 @@ docs/quant-knowledge/  # 全景认知库：qlib/mlfinlab/框架对比/因子论�
 config/             # 策略/约束 YAML
 scripts/            # update_market_data.py（qlib_bin 增量管线）等
 shared_state/       # 原子写共享状态 + paper/（纸面账户）+ _quarantine_pre_audit/
-tests/              # 647 个测试（645 passed / 2 skipped 基线）；testpaths 已在 pyproject 隔离
+tests/              # 651 个测试（649 passed / 2 skipped 基线）；testpaths 已在 pyproject 隔离
 ```
 
 ## 数据源（重要）
@@ -84,6 +83,10 @@ tests/              # 647 个测试（645 passed / 2 skipped 基线）；testpat
   ridge/rf/gbr → OOS 逐日截面 Rank-IC（非跨期 pooling）；真实 csi300 冒烟
   RF IC 0.020 > gbr 0.010 > ridge -0.0008 > 单因子 0.0021（树模型弱市占优，
   验证"表格数据树模型强"解剖结论），3 run 已入 experiment 档案
+- **Meta-label 分类选股**（trader3/research/meta_ml.py，R2 labeling 激活）：
+  标签 y=1 ⟺ 次日扣成本收益>0（该不该开仓），GradientBoostingClassifier → p(win)；
+  真实 csi300 冒烟 top10% 命中率 0.388 > 基础 0.341（+4.7pp），top30/50% 单调
+  优于基础 —— meta 模型在弱市仍筛出更高命中率子集
 
 ## 代码工程方法论（改 trader3 代码时）
 
@@ -109,7 +112,7 @@ Standards 轴（风格）与 Spec 轴（需求）分开报告。
 1. **数据必须带来源** — 真实/合成标注清楚，禁止编造；伪造指标（如硬编码 PE/融资余额）一律删除
 2. **门禁必须过** — gates_passed=false 的产出要说明原因，下游不得静默采纳
 3. **量化输出是候选信号，非投资建议**
-4. **测试必须绿** — 当前基线 645 passed / 2 skipped
+4. **测试必须绿** — 当前基线 649 passed / 2 skipped
 
 ---
 
