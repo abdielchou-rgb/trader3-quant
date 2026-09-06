@@ -85,6 +85,9 @@ files = [
     "trader3/runtime/live_rt.py",
     "trader3/risk/gateway.py",
     "trader3/risk/drift_halt.py",
-    "trader3/obs/metrics.py",
     "trader3/obs/telemetry.py",
+    "trader3/research/experiment.py",
+    "trader3/research/labeling.py",
+    "trader3/research/rigor.py",
+    "trader3/research/sample_weights.py",
 ]
