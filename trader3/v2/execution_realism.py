@@ -30,7 +30,7 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from trader3.v2.costs import DEFAULT_COSTS
-from trader3.v2.fillers import FixedSizeFiller, BarVolumeFiller
+from trader3.v2.fillers import FixedSizeFiller
 
 logger = logging.getLogger("trader3.v2.execution_realism")
 

@@ -15,15 +15,13 @@ import sys
 import threading
 from pathlib import Path
 
-import pytest
-
 _ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_ROOT))
 
 from trader3.risk.gateway import PreTradeRiskGateway  # noqa: E402
 from trader3.runtime.events import BarEvent, FillEvent, OrderIntent  # noqa: E402
 from trader3.runtime.live_rt import LiveRuntime  # noqa: E402
-from trader3.runtime.strategy import AccountSnapshot, DualModeStrategy  # noqa: E402
+from trader3.runtime.strategy import DualModeStrategy  # noqa: E402
 
 
 class _OneShot(DualModeStrategy):

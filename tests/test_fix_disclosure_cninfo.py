@@ -50,7 +50,6 @@ def test_primary_fails_cninfo_backup_succeeds(cal_path, monkeypatch):
     monkeypatch.setenv("TRADER3_DISCLOSURE_BACKUP", "1")
 
     # 直接替换模块级 ak 属性，避免 SimpleNamespace 的 _missing 限制
-    import types
     import trader3.v2.disclosure_sync as ds_mod
     mock_ak = types.SimpleNamespace(
         stock_yysj_em=lambda **kw: (_ for _ in ()).throw(RuntimeError("em down")),
