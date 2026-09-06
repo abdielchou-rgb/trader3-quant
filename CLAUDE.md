@@ -17,8 +17,9 @@
 trader3/            # 核心包（10 个 Tool，全部经 IronGate）
   tools/            #   signal / valuation / backtest / optimize / execution
   v2/               # 新版子系统：事件采集/自选股/触发/风控链/纸面交易/comps TTM
-  research/         # 研究层（R1-R6）：experiment(档案)/labeling(三重屏障)/rigor(PSR·DSR)/
-                    #   sample_weights(唯一性)/factor_library(Alpha158骨架)/collaborative(协同边际贡献)
+  research/         # 研究层（R1-R7）：experiment(档案)/labeling(三重屏障)/rigor(PSR·DSR)/
+                    #   sample_weights(唯一性)/factor_library(Alpha158骨架)/collaborative/
+                    #   ml_pipeline(因子面板→sklearn打分→OOS逐日RankIC)
   runtime/          # 双模同构运行时（replay+live+events+strategy）
   risk/             # 前置硬风控（gateway/drift_halt）
   api/              # FastAPI（X-API-Key 鉴权）
@@ -27,7 +28,7 @@ docs/quant-knowledge/  # 全景认知库：qlib/mlfinlab/框架对比/因子论�
 config/             # 策略/约束 YAML
 scripts/            # update_market_data.py（qlib_bin 增量管线）等
 shared_state/       # 原子写共享状态 + paper/（纸面账户）+ _quarantine_pre_audit/
-tests/              # 643 个测试（641 passed / 2 skipped 基线）；testpaths 已在 pyproject 隔离
+tests/              # 647 个测试（645 passed / 2 skipped 基线）；testpaths 已在 pyproject 隔离
 ```
 
 ## 数据源（重要）
@@ -78,6 +79,11 @@ tests/              # 643 个测试（641 passed / 2 skipped 基线）；testpat
   适应度 = 单因子 fitness×0.5 + 对精英池边际贡献×1.0（mc_weight 可调）；
   代末把精英入池（去重+cap 截断），best_history 记录 mc/elite_pool_size；
   默认关 = 行为完全不变（向后兼容测试覆盖）
+- **ML 打分选股**（trader3/research/ml_pipeline.py，解剖 Phase-3）：factor_library
+  因子面板 → 时间切分+embargo 训练样本（逐日横截面 zscore）→ sklearn
+  ridge/rf/gbr → OOS 逐日截面 Rank-IC（非跨期 pooling）；真实 csi300 冒烟
+  RF IC 0.020 > gbr 0.010 > ridge -0.0008 > 单因子 0.0021（树模型弱市占优，
+  验证"表格数据树模型强"解剖结论），3 run 已入 experiment 档案
 
 ## 代码工程方法论（改 trader3 代码时）
 
@@ -103,7 +109,7 @@ Standards 轴（风格）与 Spec 轴（需求）分开报告。
 1. **数据必须带来源** — 真实/合成标注清楚，禁止编造；伪造指标（如硬编码 PE/融资余额）一律删除
 2. **门禁必须过** — gates_passed=false 的产出要说明原因，下游不得静默采纳
 3. **量化输出是候选信号，非投资建议**
-4. **测试必须绿** — 当前基线 641 passed / 2 skipped
+4. **测试必须绿** — 当前基线 645 passed / 2 skipped
 
 ---
 

@@ -92,4 +92,5 @@ files = [
     "trader3/research/sample_weights.py",
     "trader3/research/factor_library.py",
     "trader3/research/collaborative.py",
+    "trader3/research/ml_pipeline.py",
 ]
