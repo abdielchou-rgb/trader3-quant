@@ -18,6 +18,7 @@ torch>=2.0
 # API server + payload tests (skipped gracefully when absent)
 fastapi>=0.100
 httpx>=0.24
+uvicorn>=0.20
 
 # Test toolchain
 pytest>=7.0

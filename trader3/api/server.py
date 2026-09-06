@@ -69,34 +69,32 @@ app = FastAPI(
 
 
 # ── 可观测性：Prometheus 指标端点（E5，无鉴权——生产部署由内网隔离保护）──
-_METRICS = None
-
-
-def _get_metrics_registry():
-    global _METRICS
-    if _METRICS is None:
-        from trader3.obs.metrics import build_default_registry
-        _METRICS = build_default_registry()
-    return _METRICS
+# 共享 telemetry 单例（trader3.obs.telemetry），使既有链路喂入的指标在此可抓。
 
 
 @app.get("/metrics")
 def metrics_endpoint() -> Any:
-    """Prometheus 抓取端点（text/plain; version=0.0.4）。"""
+    """Prometheus 抓取端点（text/plain; version=0.0.4）。
+
+    共享 telemetry 单例注册表：OrderManager 下单/风控、DriftHalt、成交延迟
+    等既有链路喂入的数据在此一并可抓（F3 真接线）。
+    """
     from fastapi.responses import PlainTextResponse
 
-    reg = _get_metrics_registry()
-    # 喂运行时快照（幂等：不存在则跳过）
+    from trader3.obs import telemetry
+
     try:
         t3 = get_trader3()
         hist = t3.get_call_history()
         for h in hist:
             if h.get("tool"):
-                reg.counter("tool_calls_total").inc(tool=str(h["tool"]))
+                telemetry.registry().counter("tool_calls_total").inc(
+                    tool=str(h["tool"]))
     except Exception:  # noqa: BLE001 — 指标路径绝不影响主服务
         pass
     return PlainTextResponse(
-        reg.render(), media_type="text/plain; version=0.0.4; charset=utf-8"
+        telemetry.render(),
+        media_type="text/plain; version=0.0.4; charset=utf-8",
     )
 
 

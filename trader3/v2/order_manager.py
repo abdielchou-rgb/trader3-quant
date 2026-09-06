@@ -122,10 +122,41 @@ class OrderManager:
             metadata={"lot": lot, "source": "order_manager"},
         )
 
-    async def submit(self, orders: list[Order], broker: BrokerBase) -> list[Order]:
-        """异步下单，返回成交后的 Order 列表（含状态）。"""
+    async def submit(self, orders: list[Order], broker: BrokerBase,
+                     risk_gateway=None,
+                     account: object | None = None) -> list[Order]:
+        """异步下单，返回成交后的 Order 列表（含状态）。
+
+        risk_gateway / account 注入时启用前置硬风控（F2，新开关不改历史行为）：
+        被拒订单置 REJECTED + metadata['risk_reason']，不触 broker；
+        放行订单经 gateway.record_submitted 记账后发送。
+        """
+        from trader3.v2.live.broker_base import OrderStatus
+
         placed: list[Order] = []
         for o in orders:
+            # 前置硬风控（可选）：拒绝 → 拦截在 broker 之前
+            if risk_gateway is not None and account is not None:
+                ok, reason = risk_gateway.check_broker_order(o, account,
+                                                             batch=orders)
+                if not ok:
+                    o.status = OrderStatus.REJECTED
+                    o.metadata = {**(o.metadata or {}),
+                                  "risk_reason": reason.name if reason else "RISK"}
+                    placed.append(o)
+                    try:  # 遥测（非阻断）
+                        from trader3.obs import telemetry
+                        telemetry.record_order_denied(
+                            reason.name if reason else "RISK")
+                    except Exception:  # noqa: BLE001
+                        pass
+                    continue
+                risk_gateway.record_submitted(o.client_order_id)
+                try:
+                    from trader3.obs import telemetry
+                    telemetry.record_order_allowed()
+                except Exception:  # noqa: BLE001
+                    pass
             try:
                 res = await broker.place_order(o)
                 placed.append(res)

@@ -43,7 +43,10 @@ class DriftHaltEngine:
         internal: dict[str, float],
         broker: dict[str, float],
     ) -> dict[str, Any]:
-        """比对持仓并按阈值决定挂起。返回差异报告。"""
+        """比对持仓并按阈值决定挂起。返回差异报告。
+
+        挂起时联动：风控网关 drift_halt + telemetry gauge + 通知通道（F5）。
+        """
         # 对齐键集（单侧缺失=差异）
         symbols = sorted(set(internal) | set(broker))
         diffs: dict[str, float] = {}
@@ -59,15 +62,50 @@ class DriftHaltEngine:
             "n_drift": len(diffs),
             "halting": False,
         }
-        if self.last_report["drifted"]:
+        if self.last_report["drifted"] and not self.halted:
             self.halted = True
             self.last_report["halting"] = True
             if self._gateway is not None:
                 self._gateway.drift_halt()
+            self._notify_halt(diffs)
         return self.last_report
 
     def resolve(self) -> None:
         """人工核对/重同步完成后解除挂起。"""
-        self.halted = False
-        if self._gateway is not None:
-            self._gateway.drift_resume()
+        if self.halted:
+            self.halted = False
+            if self._gateway is not None:
+                self._gateway.drift_resume()
+            self._notify_resolve()
+
+    # ── 告警 / 遥测（F5，非阻断） ─────────────────
+
+    def _notify_halt(self, diffs: dict[str, float]) -> None:
+        try:
+            from trader3.obs import telemetry
+            telemetry.record_drift_halt(True)
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            from trader3.notify import send_notification
+            sample = ", ".join(f"{s}:{d:+.0f}" for s, d in
+                               sorted(diffs.items())[:8])
+            send_notification(
+                "[trader3] 持仓漂移挂起开仓",
+                f"对账发现 {len(diffs)} 只持仓漂移，自动挂起开仓权限（平仓放行）。"
+                f"\n差异样例: {sample}\n请人工核对并调 resolve() 解除。",
+            )
+        except Exception as exc:  # noqa: BLE001
+            self.last_report["notify_error"] = str(exc)
+
+    def _notify_resolve(self) -> None:
+        try:
+            from trader3.obs import telemetry
+            telemetry.record_drift_halt(False)
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            from trader3.notify import send_notification
+            send_notification("[trader3] 持仓漂移已解除", "已解除开仓挂起。")
+        except Exception as exc:  # noqa: BLE001
+            self.last_report["notify_error"] = str(exc)

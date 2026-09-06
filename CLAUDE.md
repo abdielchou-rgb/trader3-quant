@@ -22,7 +22,7 @@ evolve/             # GP 因子工厂（fwd 已修正为前向收益；训练≤
 config/             # 策略/约束 YAML
 scripts/            # update_market_data.py（qlib_bin 增量管线）等
 shared_state/       # 原子写共享状态 + paper/（纸面账户）+ _quarantine_pre_audit/
-tests/              # 579 个测试（577 passed / 2 skipped 基线）；testpaths 已在 pyproject 隔离
+tests/              # 588 个测试（586 passed / 2 skipped 基线）；testpaths 已在 pyproject 隔离
 ```
 
 ## 数据源（重要）
@@ -76,7 +76,7 @@ Standards 轴（风格）与 Spec 轴（需求）分开报告。
 1. **数据必须带来源** — 真实/合成标注清楚，禁止编造；伪造指标（如硬编码 PE/融资余额）一律删除
 2. **门禁必须过** — gates_passed=false 的产出要说明原因，下游不得静默采纳
 3. **量化输出是候选信号，非投资建议**
-4. **测试必须绿** — 当前基线 577 passed / 2 skipped
+4. **测试必须绿** — 当前基线 586 passed / 2 skipped
 
 ---
 
@@ -168,3 +168,15 @@ uvicorn trader3.api.server:app --host 127.0.0.1 --port 8000
     daily-routine 批处理分容器、/data 与 shared_state 卷持久化
   - **有意不做**（诚实边界）：Level-2 ring buffer/ZeroMQ/Rust 扩展是 tick 级 HFT 设施，
     本引擎日频 A股口径下属过度设计；需要时再评估
+- **生产层真接线（2026-09 继续推进，F1-F5）**：
+  - **端到端同构闭环**：LiveRuntime.attach(gateway, executor, metrics) —— 意图→风控→WAL→
+    fill 回报回流账户+双时间戳延迟指标（tests/test_pipeline_e2e.py）
+  - **既有链路接风控**：OrderManager.submit(risk_gateway=, account=) 可选钩子 ——
+    超限单拒在 broker 前（REJECTED+metadata.risk_reason），无 gateway 历史行为不变；
+    gateway.check_broker_order 提供 Order→OrderIntent 适配（tests/test_order_manager_risk.py）
+  - **遥测真接线**：`trader3/obs/telemetry.py` 全局单例 registry；OrderManager 下单/拒单、
+    DriftHalt 挂起/恢复、API /metrics 全部共享该单例 —— 指标不再只是口头声明
+  - **漂移告警**：DriftHaltEngine 挂起/解除 → notify.send_notification + telemetry gauge（幂等不重复轰炸）
+  - **Docker 实测通过**：本机 daemon 构建（~130s）+ 容器内 uvicorn 起 API、
+    `GET /metrics` 返回 200 + 指标文本；补 uvicorn 到 requirements（曾注释缺失致容器秒退）
+  - quality gates：ruff clean / mypy 0 errors（20 文件）/ pytest 586 passed

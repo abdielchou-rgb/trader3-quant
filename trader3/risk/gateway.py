@@ -25,6 +25,7 @@ from __future__ import annotations
 from collections import deque
 from collections.abc import Iterable
 from enum import Enum, auto
+from typing import Any
 
 from trader3.runtime.events import OrderIntent
 from trader3.runtime.strategy import AccountSnapshot
@@ -146,6 +147,36 @@ class PreTradeRiskGateway:
             return False, reason
         self._bump("allowed")
         return True, None
+
+    def check_broker_order(
+        self,
+        order: Any,
+        account: AccountSnapshot,
+        batch: Iterable[Any] = (),
+    ) -> tuple[bool, DenyReason | None]:
+        """broker 层 Order 的适配入口（OrderManager/既有链路用，F2）。
+
+        把 BrokerBase.Order 转 OrderIntent 后复用同一裁决逻辑 ——
+        新链路（OrderIntent 原生）与既有链路（Order）共享一套硬规则。
+        参数类型用 Any 避免 trader3.risk → trader3.v2.live 的依赖环。
+        """
+        side = str(getattr(order.side, "value", order.side))
+        batch_intents = [
+            OrderIntent(
+                client_order_id=str(o.client_order_id),
+                symbol=str(o.symbol), side=str(getattr(o.side, "value", o.side)),
+                qty=int(getattr(o, "quantity", 0) or 0),
+                price=float(getattr(o, "price", 0) or 0.0),
+            )
+            for o in batch
+        ]
+        intent = OrderIntent(
+            client_order_id=str(order.client_order_id),
+            symbol=str(order.symbol), side=side,
+            qty=int(getattr(order, "quantity", 0) or 0),
+            price=float(getattr(order, "price", 0) or 0.0),
+        )
+        return self.check(intent, account, batch_intents=batch_intents)
 
     def _bump(self, key: str) -> None:
         cur = self.stats.get(key, 0)

@@ -86,4 +86,5 @@ files = [
     "trader3/risk/gateway.py",
     "trader3/risk/drift_halt.py",
     "trader3/obs/metrics.py",
+    "trader3/obs/telemetry.py",
 ]
